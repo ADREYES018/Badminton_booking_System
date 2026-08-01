@@ -92,6 +92,7 @@ Deno.test("capacity and remaining seats account for guests", () => {
     courts: 2,
     playersPerCourt: 8,
     confirmedCount: 12,
+    pendingCount: 0,
     guestCount: 2,
   };
   assertEquals(capacityOf(game), 16);
@@ -103,9 +104,30 @@ Deno.test("seatsRemaining never goes negative", () => {
     courts: 1,
     playersPerCourt: 4,
     confirmedCount: 4,
+    pendingCount: 0,
     guestCount: 2,
   };
   assertEquals(seatsRemaining(game), 0);
+});
+
+Deno.test("a held seat blocks a join but is not billed", () => {
+  const seats = {
+    courts: 1,
+    playersPerCourt: 4,
+    confirmedCount: 3,
+    pendingCount: 1,
+    guestCount: 0,
+  };
+  // The promoted player's unaccepted seat fills the court.
+  assertEquals(seatsRemaining(seats), 0);
+
+  // But the three who actually hold seats split the cost between three, not
+  // four. If the offer expires, nobody's share has to be recalculated.
+  const split = splitCost(9000, seats.confirmedCount, seats.guestCount, {
+    mode: "free",
+    feeFils: 0,
+  });
+  assertEquals(split.perHeadFils, 3000);
 });
 
 function g(id: string) {

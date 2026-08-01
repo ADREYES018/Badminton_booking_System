@@ -110,6 +110,9 @@ export interface GuestPricing {
   feeFils: number;
 }
 
+/** Guests allowed per player when the organizer has not chosen otherwise. */
+export const DEFAULT_MAX_GUESTS_PER_PLAYER = 1;
+
 export interface Venue {
   name: string;
   address: string;
@@ -135,6 +138,8 @@ export interface Game {
 
   totalCostFils: number;
   guestPricing: GuestPricing;
+  /** 0 disables guests entirely. */
+  maxGuestsPerPlayer: number;
   /** Frozen at the cutoff; before then the UI shows a live estimate. */
   frozenPerHeadFils?: number;
   rosterFrozenAt?: string;
@@ -149,8 +154,25 @@ export interface Game {
   cutoffHours: number;
   status: GameStatus;
 
-  /** Denormalized so a roster is never recomputed on page load. */
+  /**
+   * Denormalized so a roster is never recomputed on page load.
+   *
+   * `confirmedCount` and `pendingCount` deliberately stay separate rather than
+   * being summed into one "taken" figure, because they answer two different
+   * questions:
+   *
+   *   capacity  = confirmedCount + pendingCount + guestCount
+   *   cost split divisor = confirmedCount + guestCount
+   *
+   * A promoted player holds a seat for up to 12 hours before accepting. That
+   * seat must block other joins, but it must not enter the cost divisor — if it
+   * did, everyone's estimate would drop the moment someone was promoted and
+   * jump back if they let the offer expire, and a player who never accepted
+   * would have been charged a share.
+   */
   confirmedCount: number;
+  /** Seats held by promoted players who have not yet accepted. */
+  pendingCount: number;
   waitlistCount: number;
   guestCount: number;
 

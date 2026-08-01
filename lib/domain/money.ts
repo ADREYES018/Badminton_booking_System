@@ -31,17 +31,28 @@ export function capacityOf(game: Pick<Game, "courts" | "playersPerCourt">) {
   return game.courts * game.playersPerCourt;
 }
 
-/** Seats consumed. A guest occupies a seat regardless of how they are priced. */
+/**
+ * Seats consumed. A guest occupies a seat regardless of how they are priced,
+ * and a seat held by a promoted player who has not accepted yet is occupied
+ * too — it is exactly what stops the next person taking it.
+ *
+ * This is the capacity question, not the billing question. `splitCost` uses a
+ * narrower divisor; see the note on `Game.confirmedCount`.
+ */
 export function seatsTaken(
-  game: Pick<Game, "confirmedCount" | "guestCount">,
+  game: Pick<Game, "confirmedCount" | "pendingCount" | "guestCount">,
 ): number {
-  return game.confirmedCount + game.guestCount;
+  return game.confirmedCount + game.pendingCount + game.guestCount;
 }
 
 export function seatsRemaining(
   game: Pick<
     Game,
-    "courts" | "playersPerCourt" | "confirmedCount" | "guestCount"
+    | "courts"
+    | "playersPerCourt"
+    | "confirmedCount"
+    | "pendingCount"
+    | "guestCount"
   >,
 ): number {
   return Math.max(0, capacityOf(game) - seatsTaken(game));

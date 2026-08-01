@@ -8,8 +8,14 @@
  *    single-file edit and the type checker finds every caller.
  */
 
+/**
+ * `pending_confirm` is a promoted waitlister who has been offered a seat but
+ * has not accepted yet. The seat is held — it blocks other joins — but it is
+ * not a confirmed seat and does not enter the cost split.
+ */
 export type SignupStatus =
   | "confirmed"
+  | "pending_confirm"
   | "waitlisted"
   | "cancelled"
   | "no_show"
