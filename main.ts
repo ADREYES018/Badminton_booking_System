@@ -9,12 +9,16 @@ import { App, staticFiles } from "fresh";
 import { loadAuthState } from "./lib/auth/middleware.ts";
 import type { AuthState } from "./lib/auth/middleware.ts";
 import { handleRouteError } from "./lib/auth/error_middleware.ts";
+import { getKv } from "./lib/kv/kv.ts";
+import { startQueueListener } from "./lib/queue/dispatch.ts";
 
 import { indexRoute } from "./routes/index.tsx";
 import { loginRoutes } from "./routes/auth/login.tsx";
 import { verifyRoute } from "./routes/auth/verify.tsx";
 import { logoutRoute } from "./routes/auth/logout.ts";
 import { gamesRoute } from "./routes/games.tsx";
+import { gameRoute } from "./routes/game.tsx";
+import { organizerGameRoutes } from "./routes/organizer/games.tsx";
 import { profileRoutes } from "./routes/profile.tsx";
 import { photoRoute } from "./routes/api/photo.ts";
 import { manifestRoute } from "./routes/api/manifest.ts";
@@ -49,10 +53,18 @@ loginRoutes(app);
 verifyRoute(app);
 logoutRoute(app);
 gamesRoute(app);
+// Registered before /games/:slug so the organizer paths are not swallowed by
+// the slug pattern.
+organizerGameRoutes(app);
+gameRoute(app);
 profileRoutes(app);
 photoRoute(app);
 manifestRoute(app);
 
 if (import.meta.main) {
+  // The waitlist and the cutoff freeze run on delayed queue messages. The
+  // listener is started only for a real server — tests drive the handler
+  // directly, so they never depend on delivery timing.
+  startQueueListener(await getKv());
   await app.listen();
 }

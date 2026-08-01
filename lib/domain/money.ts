@@ -117,6 +117,25 @@ export function splitCost(
   }
 }
 
+/**
+ * What the viewer would pay per head, for display.
+ *
+ * `currentSplit` returns zero for a game nobody has joined, which is correct
+ * — an empty roster owes nothing — but it is the wrong thing to *show*. A new
+ * game advertising "AED 0 per player" reads as free when it is in fact the
+ * full court cost for whoever joins first, and that is exactly the moment a
+ * game is most likely to be browsed.
+ *
+ * So an empty game is quoted as if the viewer had joined: the honest answer
+ * to "what would this cost me?".
+ */
+export function displaySplit(game: Game): CostSplit {
+  if (game.frozenPerHeadFils === undefined && game.confirmedCount === 0) {
+    return splitCost(game.totalCostFils, 1, 0, game.guestPricing);
+  }
+  return currentSplit(game);
+}
+
 /** Live estimate, or the frozen figure once the roster has locked. */
 export function currentSplit(game: Game): CostSplit {
   if (game.frozenPerHeadFils !== undefined) {

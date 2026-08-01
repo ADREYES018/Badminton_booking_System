@@ -3,6 +3,8 @@ import {
   aedToFils,
   amountOwed,
   capacityOf,
+  currentSplit,
+  displaySplit,
   formatFils,
   seatsRemaining,
   splitCost,
@@ -108,6 +110,51 @@ Deno.test("seatsRemaining never goes negative", () => {
     guestCount: 2,
   };
   assertEquals(seatsRemaining(game), 0);
+});
+
+Deno.test("an empty game is quoted as if you joined alone, not as free", () => {
+  const game = {
+    totalCostFils: 12000,
+    confirmedCount: 0,
+    pendingCount: 0,
+    guestCount: 0,
+    guestPricing: { mode: "free" as const, feeFils: 0 },
+    frozenPerHeadFils: undefined,
+  } as Parameters<typeof displaySplit>[0];
+
+  // currentSplit correctly says nobody owes anything...
+  assertEquals(currentSplit(game).perHeadFils, 0);
+  // ...but showing "AED 0" would read as free, when the first player in
+  // actually covers the whole court.
+  assertEquals(displaySplit(game).perHeadFils, 12000);
+});
+
+Deno.test("displaySplit defers to the real split once anyone has joined", () => {
+  const game = {
+    totalCostFils: 12000,
+    confirmedCount: 4,
+    pendingCount: 0,
+    guestCount: 0,
+    guestPricing: { mode: "free" as const, feeFils: 0 },
+    frozenPerHeadFils: undefined,
+  } as Parameters<typeof displaySplit>[0];
+
+  assertEquals(displaySplit(game).perHeadFils, 3000);
+});
+
+Deno.test("displaySplit never overrides a frozen figure", () => {
+  const game = {
+    totalCostFils: 12000,
+    confirmedCount: 0,
+    pendingCount: 0,
+    guestCount: 0,
+    guestPricing: { mode: "free" as const, feeFils: 0 },
+    frozenPerHeadFils: 2500,
+  } as Parameters<typeof displaySplit>[0];
+
+  // A frozen game with an empty roster is a real, if unusual, state — the
+  // locked figure is what everyone owes and must not be recomputed.
+  assertEquals(displaySplit(game).perHeadFils, 2500);
 });
 
 Deno.test("a held seat blocks a join but is not billed", () => {

@@ -8,10 +8,12 @@ vite.config.ts.timestamp*
 *.key
 
 # Local Deno KV database
+# Anchored to the repository root: a bare `data/` also matches `lib/data/`,
+# which silently excluded the entire data layer from version control.
 *.kv
 *.kv-shm
 *.kv-wal
-data/
+/data/
 
 # OS / editor
 .DS_Store
