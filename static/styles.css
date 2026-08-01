@@ -1,0 +1,230 @@
+@import "tailwindcss";
+
+/*
+ * Smash Club design tokens.
+ * Source of truth: stitch_smash_club_sports_utility/smash_club_design_system/DESIGN.md
+ * The mockup code.html files use a different, conflicting palette (Inter, #fff8f0);
+ * those files are reused for layout only, never for tokens.
+ */
+@theme {
+  /* Light surfaces — warm, lime-tinted off-white to cut court glare */
+  --color-surface: #f9fbe7;
+  --color-surface-dim: #dadcc8;
+  --color-surface-bright: #f9fbe7;
+  --color-surface-lowest: #ffffff;
+  --color-surface-low: #f3f5e1;
+  --color-surface-container: #eeefdc;
+  --color-surface-high: #e8ead6;
+  --color-surface-highest: #e2e4d1;
+  --color-surface-variant: #e2e4d1;
+
+  --color-on-surface: #1a1d11;
+  --color-on-surface-variant: #444934;
+  --color-inverse-surface: #2f3225;
+  --color-inverse-on-surface: #f0f2df;
+
+  --color-outline: #747962;
+  --color-outline-variant: #c4c9ae;
+
+  /* Electric Lime — speed, court sports, high visibility */
+  --color-primary: #506600;
+  --color-on-primary: #ffffff;
+  --color-primary-container: #c6f432;
+  --color-on-primary-container: #566d00;
+  --color-inverse-primary: #aad600;
+  --color-lime: #c6f432;
+  --color-lime-dim: #aad600;
+  --color-on-lime: #161f00;
+
+  --color-secondary: #585f6c;
+  --color-on-secondary: #ffffff;
+  --color-secondary-container: #dce2f3;
+  --color-on-secondary-container: #5e6572;
+
+  --color-tertiary: #3e6376;
+  --color-on-tertiary: #ffffff;
+  --color-tertiary-container: #c2e9ff;
+  --color-on-tertiary-container: #446a7c;
+
+  --color-error: #ba1a1a;
+  --color-on-error: #ffffff;
+  --color-error-container: #ffdad6;
+  --color-on-error-container: #93000a;
+
+  /* Status colors, saturated so they read against lime and charcoal alike */
+  --color-success: #33cc88;
+  --color-on-success: #00311c;
+  --color-warning: #b26a00;
+  --color-on-warning: #ffffff;
+
+  /* Type: Sora for geometric headlines, Hanken Grotesk for functional text */
+  --font-headline: "Sora", ui-sans-serif, system-ui, sans-serif;
+  --font-body: "Hanken Grotesk", ui-sans-serif, system-ui, sans-serif;
+
+  --text-display: 48px;
+  --text-display--line-height: 1.1;
+  --text-display--letter-spacing: -0.04em;
+  --text-display--font-weight: 800;
+
+  --text-headline-lg: 32px;
+  --text-headline-lg--line-height: 1.2;
+  --text-headline-lg--letter-spacing: -0.02em;
+  --text-headline-lg--font-weight: 700;
+
+  --text-headline-md: 24px;
+  --text-headline-md--line-height: 1.2;
+  --text-headline-md--letter-spacing: -0.01em;
+  --text-headline-md--font-weight: 700;
+
+  --text-body-lg: 18px;
+  --text-body-lg--line-height: 1.6;
+
+  --text-body-md: 16px;
+  --text-body-md--line-height: 1.6;
+
+  --text-label: 14px;
+  --text-label--line-height: 1.2;
+  --text-label--letter-spacing: 0.05em;
+  --text-label--font-weight: 700;
+
+  --text-label-sm: 12px;
+  --text-label-sm--line-height: 1.2;
+  --text-label-sm--font-weight: 500;
+
+  /* Shape: 16px base radius softens the heavy type; pills for interactives */
+  --radius-sm: 0.25rem;
+  --radius-DEFAULT: 0.5rem;
+  --radius-md: 0.75rem;
+  --radius-lg: 1rem;
+  --radius-xl: 1.5rem;
+
+  /* 4px baseline rhythm */
+  --spacing-gutter: 16px;
+  --spacing-margin-mobile: 20px;
+  --spacing-margin-desktop: 40px;
+
+  /* Tonal layering, not realism */
+  --shadow-card: 0 4px 20px rgb(0 0 0 / 0.05);
+  --shadow-float: 0 8px 24px rgb(0 0 0 / 0.12);
+}
+
+/*
+ * Dark mode. The design system calls for deep charcoal with elevation
+ * expressed as lighter fills rather than shadows. The Stitch mockups declared
+ * darkMode:"class" but never supplied values, so these are new.
+ */
+@custom-variant dark (&:where(.dark, .dark *));
+
+.dark {
+  --color-surface: #14160e;
+  --color-surface-dim: #14160e;
+  --color-surface-bright: #3a3d30;
+  --color-surface-lowest: #0e100a;
+  --color-surface-low: #1c1f15;
+  --color-surface-container: #202318;
+  --color-surface-high: #2b2e22;
+  --color-surface-highest: #36392c;
+  --color-surface-variant: #444934;
+
+  --color-on-surface: #e2e4d1;
+  --color-on-surface-variant: #c4c9ae;
+  --color-inverse-surface: #e2e4d1;
+  --color-inverse-on-surface: #2f3225;
+
+  --color-outline: #8e937a;
+  --color-outline-variant: #444934;
+
+  --color-primary: #aad600;
+  --color-on-primary: #283500;
+  --color-primary-container: #3b4d00;
+  --color-on-primary-container: #c6f432;
+
+  --color-secondary-container: #404754;
+  --color-on-secondary-container: #dce2f3;
+
+  --color-tertiary-container: #244b5d;
+  --color-on-tertiary-container: #c2e9ff;
+
+  --color-error: #ffb4ab;
+  --color-on-error: #690005;
+  --color-error-container: #93000a;
+  --color-on-error-container: #ffdad6;
+
+  --color-success: #33cc88;
+  --color-on-success: #00311c;
+  --color-warning: #ffb95c;
+  --color-on-warning: #442b00;
+
+  --shadow-card: 0 4px 20px rgb(0 0 0 / 0.4);
+  --shadow-float: 0 8px 24px rgb(0 0 0 / 0.5);
+}
+
+/* Self-hosted fonts so the PWA works offline and no request leaves the origin. */
+@font-face {
+  font-family: "Sora";
+  src: url("/fonts/sora-variable.woff2") format("woff2-variations");
+  font-weight: 100 800;
+  font-display: swap;
+}
+
+@font-face {
+  font-family: "Hanken Grotesk";
+  src: url("/fonts/hanken-grotesk-variable.woff2") format("woff2-variations");
+  font-weight: 100 900;
+  font-display: swap;
+}
+
+@layer base {
+  html {
+    font-family: var(--font-body);
+    background-color: var(--color-surface);
+    color: var(--color-on-surface);
+    -webkit-text-size-adjust: 100%;
+  }
+
+  body {
+    font-size: var(--text-body-md);
+    line-height: 1.6;
+    min-height: 100dvh;
+  }
+
+  h1,
+  h2,
+  h3 {
+    font-family: var(--font-headline);
+  }
+
+  /* Visible focus for keyboard users — the mockups had none at all. */
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+    border-radius: var(--radius-sm);
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    *::before,
+    *::after {
+      animation-duration: 0.01ms !important;
+      transition-duration: 0.01ms !important;
+      scroll-behavior: auto !important;
+    }
+  }
+}
+
+@utility pb-safe {
+  padding-bottom: max(env(safe-area-inset-bottom), 1rem);
+}
+
+/* Screen-reader-only text, for icon-only controls. */
+@utility sr-only-text {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border-width: 0;
+}

@@ -1,0 +1,27 @@
+# Fresh build output
+_fresh/
+vite.config.ts.timestamp*
+
+# Secrets — never commit
+.env
+.env.local
+*.key
+
+# Local Deno KV database
+*.kv
+*.kv-shm
+*.kv-wal
+data/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+
+# Deps
+node_modules/
+
+# Stitch design mockups — reference material, not source
+stitch_smash_club_sports_utility/
