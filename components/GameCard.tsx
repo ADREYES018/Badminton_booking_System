@@ -86,6 +86,20 @@ export function GameStatusChip(props: { game: Game }) {
   return <Chip tone="success">{seatsLabel(game)}</Chip>;
 }
 
+/** Where the viewer stands, as text — for a label that cannot carry a chip. */
+function viewerStateLabel(state: ViewerState): string {
+  switch (state) {
+    case "confirmed":
+      return "You are in.";
+    case "pending_confirm":
+      return "Confirm your seat.";
+    case "waitlisted":
+      return "You are on the waitlist.";
+    case "none":
+      return "";
+  }
+}
+
 /** Where the viewer stands, when they are involved at all. */
 export function ViewerStateChip(props: { state: ViewerState }) {
   switch (props.state) {
@@ -136,26 +150,66 @@ export function GameCard(
   const href = props.href ?? `/games/${game.slug}`;
   const cutoff = cutoffAt(game.startUtc, game.cutoffHours);
   const cutoffPassed = new Date() >= cutoff;
+  const inactive = game.status === "cancelled" || game.status === "completed";
 
   return (
-    <Card class="transition-shadow hover:shadow-float focus-within:shadow-float">
+    <Card
+      class={cx(
+        "transition-shadow hover:shadow-float focus-within:shadow-float",
+        // A cancelled or played game is dimmed as well as chipped, so its state
+        // does not rest on chip colour alone.
+        inactive && "opacity-70",
+      )}
+    >
       <a
         href={href}
+        // The link wraps the whole card, so its accessible name would otherwise
+        // be every figure inside it read as one run-on sentence.
+        aria-label={[
+          `${game.title},`,
+          `${
+            formatGameTime(game.startUtc, game.endUtc)
+          } at ${game.venue.name}.`,
+          game.status === "cancelled"
+            ? "Cancelled."
+            : game.status === "completed"
+            ? "Played."
+            : `${seatsLabel(game)}.`,
+          viewerStateLabel(viewer),
+        ].filter(Boolean).join(" ")}
         class="flex flex-col gap-3 no-underline text-inherit cursor-pointer
                rounded-lg focus-visible:outline-2 focus-visible:outline-primary
                focus-visible:outline-offset-4"
       >
         <div class="flex items-start justify-between gap-3">
-          <h3 class="text-headline-md font-headline text-on-surface">
+          <h3
+            class={cx(
+              "text-headline-md font-headline text-on-surface",
+              game.status === "cancelled" && "line-through",
+            )}
+          >
             {game.title}
           </h3>
-          <div class="flex flex-col items-end gap-1.5 shrink-0">
+          <div
+            aria-hidden="true"
+            class="flex flex-col items-end gap-1.5 shrink-0"
+          >
             <GameStatusChip game={game} />
             <ViewerStateChip state={viewer} />
           </div>
         </div>
 
-        <dl class="flex flex-col gap-1.5 text-body-md text-on-surface-variant">
+        {
+          /*
+          The link's aria-label already carries the time, venue and seat count.
+          Hiding the visual copy stops a screen reader announcing each figure a
+          second time.
+        */
+        }
+        <dl
+          aria-hidden="true"
+          class="flex flex-col gap-1.5 text-body-md text-on-surface-variant"
+        >
           <div class="flex items-center gap-2">
             <dt class="sr-only-text">When</dt>
             <ClockIcon />
@@ -168,11 +222,13 @@ export function GameCard(
           </div>
         </dl>
 
-        <ProgressBar
-          value={seatsTaken(game)}
-          max={capacityOf(game)}
-          label="Spots filled"
-        />
+        <div aria-hidden="true">
+          <ProgressBar
+            value={seatsTaken(game)}
+            max={capacityOf(game)}
+            label="Spots filled"
+          />
+        </div>
 
         <div class="flex items-end justify-between gap-3 pt-1">
           <CostLine game={game} />

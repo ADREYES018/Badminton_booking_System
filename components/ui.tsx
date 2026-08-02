@@ -12,8 +12,12 @@ export function cx(...parts: Array<string | false | null | undefined>): string {
 
 type ButtonVariant = "primary" | "secondary" | "ghost" | "danger";
 
+// `min-h-11` is 44px, the minimum comfortable touch target. It is on the base
+// rather than the size utilities so a caller passing tighter padding — the
+// guest "Remove" control does — cannot shrink the tap area below it.
 const BUTTON_BASE =
   "inline-flex items-center justify-center gap-2 rounded-full font-body font-bold " +
+  "min-h-11 cursor-pointer " +
   "transition-colors disabled:opacity-50 disabled:pointer-events-none active:scale-[0.98]";
 
 const BUTTON_VARIANTS: Record<ButtonVariant, string> = {
