@@ -90,3 +90,97 @@ which the mockups designed and the spec omitted. The mockups' "streak" was cut.
 - A service worker. The manifest, icons and offline-capable shell are in place;
   the caching layer lands with the games list in Phase 2, since there is
   nothing to cache until then.
+
+## Phase 2 — Games, RSVP and the waitlist
+
+### Two seat counters, not one
+
+`Game` gained `pendingCount` alongside `confirmedCount`. They answer different
+questions and merging them would be wrong:
+
+```
+capacity           = confirmedCount + pendingCount + guestCount
+cost split divisor = confirmedCount + guestCount
+```
+
+A promoted player holds a seat for up to 12 hours before accepting. That seat
+has to block other joins — otherwise the promotion means nothing — but it must
+not enter the cost divisor. If it did, everyone's estimate would drop the
+moment an offer was made and jump back if it lapsed, and `splitCost` would have
+charged a share to someone who never accepted.
+
+### Guests are a per-game limit
+
+`Game.maxGuestsPerPlayer` defaults to 1; 0 disables guests. A guest occupies a
+real seat, so a player bringing one needs two seats free. A party that does not
+fit entirely goes to the waitlist together rather than being split up.
+
+### Skill is advisory, time is not
+
+A player outside a game's skill range sees a warning and may still join —
+organizers set ranges loosely and a club game with an empty seat is better
+filled. Joining after the game has started is refused outright. Joining after
+the cutoff is allowed while seats remain, since the organizer has already paid
+for the court.
+
+### An empty game is quoted as "if you join alone"
+
+`splitCost` returns zero when nobody has joined, which is correct — an empty
+roster owes nothing — but showing "AED 0 per player" reads as free, at exactly
+the moment a new game is most likely to be browsed. `displaySplit` quotes an
+empty game as though the viewer had joined, which is the honest answer to
+"what would this cost me?".
+
+### Groups exist but only one is used
+
+Phase 2 seeds a single "Smash Club" group on first touch and joins every user
+to it. The records are real `Group` and `Membership` rows under the multi-group
+key schema, so a second group later is a routing and UI change rather than a
+migration. Group CRUD, invites and switching are deferred.
+
+### The queue cannot be un-scheduled
+
+Deno KV has no way to cancel or replace an enqueued message. So:
+
+- Rescheduling is "enqueue another one". A `cutoff_freeze` that fires early
+  because the organizer moved the start time notices the cutoff has not
+  arrived, re-enqueues itself, and returns.
+- Every handler is idempotent, because delivery is at least once. A repeated
+  promote finds no free seat; a repeated freeze finds `rosterFrozenAt` already
+  set.
+- A read-triggered sweep (`lib/data/sweep.ts`) is the backstop for a message
+  that never arrives at all. It never blocks a response.
+
+Follow-on messages are enqueued *after* a commit, never inside a `withRetry`
+callback — the callback may run several times, and enqueuing from inside would
+post a message per attempt including ones that never committed.
+
+### RSVP is a form POST, with the island only adding feedback
+
+Every action is a plain `<form method="post">` that redirects, so it works with
+JavaScript off. `islands/RsvpButton.tsx` adds exactly one thing: the button
+disables and changes label on submit. It deliberately does not post JSON or
+optimistically flip a seat to "joined" — the server is the only party that
+knows which of two simultaneous taps won, and guessing would show a seat that
+was not there.
+
+### Bugs found while building this phase
+
+**`withRetry` rejected roughly a quarter of 40 simultaneous joins.** Every
+joiner writes the same game record, so they serialize; a writer near the back
+legitimately lost more than the 8-attempt budget allowed, and surfaced a
+`ConflictError` to a player who had done nothing wrong. Raised to 24 attempts
+and capped the backoff, which was growing to most of a second per wait. 100
+parallel joins now settle in about 1.1 seconds with nothing rejected.
+
+**`nextSequence` could hand two callers the same number.** It incremented
+atomically with `sum` but read the result back with a plain `get`, so a second
+increment landing in between gave both callers the same value. Two waitlisted
+players would have collided on one index key and one would have vanished from
+the queue. It now claims its value under a versionstamp check.
+
+**`.gitignore` excluded the entire data layer.** The pattern `data/` for the
+local KV database also matched `lib/data/`, so nine files — every data-layer
+module from both phases — were never committed and a fresh clone would not have
+built. Now anchored as `/data/`. Verified by cloning the repository and running
+the suite from the clone.
