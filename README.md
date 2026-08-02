@@ -21,13 +21,13 @@ is promoted to platform owner.
 
 ## Tasks
 
-| Task | Purpose |
-|---|---|
-| `deno task dev` | Vite dev server with hot reload |
+| Task              | Purpose                         |
+| ----------------- | ------------------------------- |
+| `deno task dev`   | Vite dev server with hot reload |
 | `deno task build` | Production build into `_fresh/` |
-| `deno task start` | Serve the production build |
-| `deno task test` | Run the test suite |
-| `deno task check` | Format, lint and type-check |
+| `deno task start` | Serve the production build      |
+| `deno task test`  | Run the test suite              |
+| `deno task check` | Format, lint and type-check     |
 
 Photo upload cannot be exercised under `deno task dev` — see `DECISIONS.md`.
 
@@ -45,9 +45,9 @@ static/         Styles, self-hosted fonts, PWA icons
 tools/          One-off scripts (key generation, icon rendering)
 ```
 
-`lib/kv/keys.ts` is the single source of truth for every KV key. Nothing
-outside it builds a key array, so a schema change is one file plus whatever the
-type checker flags.
+`lib/kv/keys.ts` is the single source of truth for every KV key. Nothing outside
+it builds a key array, so a schema change is one file plus whatever the type
+checker flags.
 
 ## Conventions
 

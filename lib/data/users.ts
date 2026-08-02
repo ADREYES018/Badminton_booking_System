@@ -65,7 +65,9 @@ export async function createUser(
   input: CreateUserInput,
 ): Promise<User> {
   const emailLower = normalizeEmail(input.email);
-  const phone = input.phone ? normalizePhone(input.phone) ?? undefined : undefined;
+  const phone = input.phone
+    ? normalizePhone(input.phone) ?? undefined
+    : undefined;
   const now = nowIso();
 
   const user: User = {

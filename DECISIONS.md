@@ -7,23 +7,23 @@ deliberately departs from it. Newest phase last.
 
 ### Deviations from the spec
 
-**Guest pricing is organizer-set per game, not a fixed divisor.**
-The spec said `perHead = ceil(totalCourtCostFils / confirmedCount)` while also
-saying a guest is "charged like a normal player" — those contradict whenever a
-guest attends. Guest pricing is now a per-game choice of three modes:
+**Guest pricing is organizer-set per game, not a fixed divisor.** The spec said
+`perHead = ceil(totalCourtCostFils / confirmedCount)` while also saying a guest
+is "charged like a normal player" — those contradict whenever a guest attends.
+Guest pricing is now a per-game choice of three modes:
 
-| Mode | Members owe | Guest owes |
-|---|---|---|
-| `full_share` | `ceil(total / (confirmed + guests))` | same as a member |
-| `flat_fee` | `ceil((total - guests × fee) / confirmed)` | the fixed fee |
-| `free` | `ceil(total / confirmed)` | nothing |
+| Mode         | Members owe                                | Guest owes       |
+| ------------ | ------------------------------------------ | ---------------- |
+| `full_share` | `ceil(total / (confirmed + guests))`       | same as a member |
+| `flat_fee`   | `ceil((total - guests × fee) / confirmed)` | the fixed fee    |
+| `free`       | `ceil(total / confirmed)`                  | nothing          |
 
-**Payment opens at the cutoff, not 72 hours before the game.**
-The chosen model is "charge only after the cutoff", so the roster is frozen
-before anyone pays. With a 48-hour cutoff the spec's T-72h payment reminder
-would fire before payment is even possible. Reminders are therefore T-36h,
-T-24h and T-3h, and the organizer fronts the court cost. Revisit if the cutoff
-is ever set beyond 72 hours.
+**Payment opens at the cutoff, not 72 hours before the game.** The chosen model
+is "charge only after the cutoff", so the roster is frozen before anyone pays.
+With a 48-hour cutoff the spec's T-72h payment reminder would fire before
+payment is even possible. Reminders are therefore T-36h, T-24h and T-3h, and the
+organizer fronts the court cost. Revisit if the cutoff is ever set beyond 72
+hours.
 
 **Cancellation cutoff default is 48 hours.** The Stitch mockups show 24h; the
 spec says 48h. The spec wins, and it is overridable per game.
@@ -36,15 +36,15 @@ than left pending.
 
 ### Design system
 
-**Tokens come from `smash_club_design_system/DESIGN.md`, not the mockups.**
-The mockup `code.html` files use Inter and a `#fff8f0` surface; the design
-system specifies Sora + Hanken Grotesk on `#f9fbe7`. The mockups are reused for
-layout and copy only. Their Tailwind CDN `<script>`, Google Fonts links and
+**Tokens come from `smash_club_design_system/DESIGN.md`, not the mockups.** The
+mockup `code.html` files use Inter and a `#fff8f0` surface; the design system
+specifies Sora + Hanken Grotesk on `#f9fbe7`. The mockups are reused for layout
+and copy only. Their Tailwind CDN `<script>`, Google Fonts links and
 `lh3.googleusercontent.com` images are all dropped — the PWA has to work
 offline, and fonts are self-hosted in `static/fonts/`.
 
-**Dark mode values are new.** The mockups declared `darkMode: "class"` but
-never supplied a dark palette.
+**Dark mode values are new.** The mockups declared `darkMode: "class"` but never
+supplied a dark palette.
 
 **Logos.** `BLACK_LOGO_HORIZONTAL.svg` everywhere, `BLACK_LOGO_VERTICAL.svg` on
 login and verify, `ICON.svg` for the PWA icon and favicon. They are inlined as
@@ -56,16 +56,18 @@ is a ~2 MB raster wrapped in an SVG, not real vector art.
 ### Storage and runtime
 
 **Photos are 256×256 JPEG, stored in KV.** The spec suggested WebP. Deno has no
-2D canvas context — `new OffscreenCanvas().getContext("2d")` returns `null`
-both locally and on Deploy — so images are processed with ImageScript (pure
-WASM), which has no WebP encoder. JPEG at quality 82 yields ~10 KB for a
-256×256 square, far below KV's 64 KiB value cap. ImageScript is imported lazily
-because its WASM payload breaks Vite's SSR module runner at boot.
+2D canvas context — `new OffscreenCanvas().getContext("2d")` returns `null` both
+locally and on Deploy — so images are processed with ImageScript (pure WASM),
+which has no WebP encoder. JPEG at quality 82 yields ~10 KB for a 256×256
+square, far below KV's 64 KiB value cap. ImageScript is imported lazily because
+its WASM payload breaks Vite's SSR module runner at boot.
 
 **Known limitation:** Vite's dev server rejects multipart requests containing a
 file part with a bare 400 before they reach Fresh, so photo upload cannot be
-exercised through `deno task dev`. It works under `deno task build && deno task
-start` and on Deno Deploy, and is covered directly against the app handler.
+exercised through `deno task dev`. It works under
+`deno task build && deno task
+start` and on Deno Deploy, and is covered directly
+against the app handler.
 
 **Super admin is seeded from `SUPER_ADMIN_EMAIL`** and promoted on first login,
 rather than "first user to sign up wins".
@@ -78,8 +80,8 @@ limit per email, one per IP. A sliding window would cost more bookkeeping than
 this threat model warrants.
 
 **Group payout IBANs are stored in clear.** They are the group's public
-receiving account, shown to every member with a copy button. Only *player
-refund* IBANs are encrypted with AES-256-GCM.
+receiving account, shown to every member with a copy button. Only _player
+refund_ IBANs are encrypted with AES-256-GCM.
 
 **Stats include a per-group leaderboard** (minimum five confirmed matches),
 which the mockups designed and the spec omitted. The mockups' "streak" was cut.
@@ -88,8 +90,8 @@ which the mockups designed and the spec omitted. The mockups' "streak" was cut.
 
 - Recurring game templates, per the spec.
 - A service worker. The manifest, icons and offline-capable shell are in place;
-  the caching layer lands with the games list in Phase 2, since there is
-  nothing to cache until then.
+  the caching layer lands with the games list in Phase 2, since there is nothing
+  to cache until then.
 
 ## Phase 2 — Games, RSVP and the waitlist
 
@@ -105,9 +107,9 @@ cost split divisor = confirmedCount + guestCount
 
 A promoted player holds a seat for up to 12 hours before accepting. That seat
 has to block other joins — otherwise the promotion means nothing — but it must
-not enter the cost divisor. If it did, everyone's estimate would drop the
-moment an offer was made and jump back if it lapsed, and `splitCost` would have
-charged a share to someone who never accepted.
+not enter the cost divisor. If it did, everyone's estimate would drop the moment
+an offer was made and jump back if it lapsed, and `splitCost` would have charged
+a share to someone who never accepted.
 
 ### Guests are a per-game limit
 
@@ -128,14 +130,14 @@ for the court.
 `splitCost` returns zero when nobody has joined, which is correct — an empty
 roster owes nothing — but showing "AED 0 per player" reads as free, at exactly
 the moment a new game is most likely to be browsed. `displaySplit` quotes an
-empty game as though the viewer had joined, which is the honest answer to
-"what would this cost me?".
+empty game as though the viewer had joined, which is the honest answer to "what
+would this cost me?".
 
 ### Groups exist but only one is used
 
-Phase 2 seeds a single "Smash Club" group on first touch and joins every user
-to it. The records are real `Group` and `Membership` rows under the multi-group
-key schema, so a second group later is a routing and UI change rather than a
+Phase 2 seeds a single "Smash Club" group on first touch and joins every user to
+it. The records are real `Group` and `Membership` rows under the multi-group key
+schema, so a second group later is a routing and UI change rather than a
 migration. Group CRUD, invites and switching are deferred.
 
 ### The queue cannot be un-scheduled
@@ -143,15 +145,15 @@ migration. Group CRUD, invites and switching are deferred.
 Deno KV has no way to cancel or replace an enqueued message. So:
 
 - Rescheduling is "enqueue another one". A `cutoff_freeze` that fires early
-  because the organizer moved the start time notices the cutoff has not
-  arrived, re-enqueues itself, and returns.
+  because the organizer moved the start time notices the cutoff has not arrived,
+  re-enqueues itself, and returns.
 - Every handler is idempotent, because delivery is at least once. A repeated
   promote finds no free seat; a repeated freeze finds `rosterFrozenAt` already
   set.
 - A read-triggered sweep (`lib/data/sweep.ts`) is the backstop for a message
   that never arrives at all. It never blocks a response.
 
-Follow-on messages are enqueued *after* a commit, never inside a `withRetry`
+Follow-on messages are enqueued _after_ a commit, never inside a `withRetry`
 callback — the callback may run several times, and enqueuing from inside would
 post a message per attempt including ones that never committed.
 
@@ -160,9 +162,9 @@ post a message per attempt including ones that never committed.
 Every action is a plain `<form method="post">` that redirects, so it works with
 JavaScript off. `islands/RsvpButton.tsx` adds exactly one thing: the button
 disables and changes label on submit. It deliberately does not post JSON or
-optimistically flip a seat to "joined" — the server is the only party that
-knows which of two simultaneous taps won, and guessing would show a seat that
-was not there.
+optimistically flip a seat to "joined" — the server is the only party that knows
+which of two simultaneous taps won, and guessing would show a seat that was not
+there.
 
 ### Bugs found while building this phase
 
