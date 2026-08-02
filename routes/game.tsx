@@ -53,7 +53,7 @@ import {
 import { getUser } from "../lib/data/users.ts";
 import { ensureDefaultGroup, ensureMembership } from "../lib/data/groups.ts";
 import { sweepInBackground } from "../lib/data/sweep.ts";
-import { audit } from "../lib/data/audit.ts";
+import { audit, type AuditAction } from "../lib/data/audit.ts";
 import { clientIp } from "../lib/auth/middleware.ts";
 import {
   capacityOf,
@@ -482,131 +482,121 @@ export function gameRoute(app: App<State>) {
     return { user, kv, form, game };
   }
 
-  app.post("/games/:slug/join", async (ctx) => {
-    const { user, kv, game } = await begin(ctx);
+  /**
+   * Runs one RSVP action: perform it, flush any queue effects, record the
+   * audit entry, and redirect with the resulting message.
+   *
+   * Every action shares this shape, including the `SignupError` catch. That
+   * catch is the reason this is one helper rather than five copies — a
+   * `SignupError` is a refusal the player can act on and must come back as a
+   * readable message, whereas anything else is a bug and has to keep
+   * propagating to the error handler. Getting that distinction wrong in one
+   * copy out of five is exactly the kind of thing that goes unnoticed.
+   */
+  async function act(
+    ctx: {
+      req: Request;
+      params: Record<string, string | undefined>;
+      state: State;
+    },
+    run: (
+      context: { user: User; kv: Deno.Kv; form: FormData; game: Game },
+    ) => Promise<{ action: AuditAction; notice: string } | Response>,
+  ): Promise<Response> {
+    const context = await begin(ctx);
 
     try {
-      const result = await joinGame(kv, game.id, user);
-      await flush(kv, result.effects);
-      await audit(kv, {
-        actorId: user.id,
-        action: result.outcome === "confirmed"
-          ? "signup.joined"
-          : "signup.waitlisted",
-        targetId: game.id,
-        groupId: game.groupId,
+      const outcome = await run(context);
+      // A validation failure returns its own redirect and records nothing.
+      if (outcome instanceof Response) return outcome;
+
+      await audit(context.kv, {
+        actorId: context.user.id,
+        action: outcome.action,
+        targetId: context.game.id,
+        groupId: context.game.groupId,
         ip: clientIp(ctx.req),
       });
-
-      return backToGame(game.slug, {
-        notice: result.outcome === "confirmed"
-          ? "You are in. See you on court."
-          : "You are on the waitlist — we will let you know if a spot opens.",
-      });
+      return backToGame(context.game.slug, { notice: outcome.notice });
     } catch (error) {
       if (error instanceof SignupError) {
-        return backToGame(game.slug, { error: error.message });
+        return backToGame(context.game.slug, { error: error.message });
       }
       throw error;
     }
-  });
+  }
 
-  app.post("/games/:slug/leave", async (ctx) => {
-    const { user, kv, game } = await begin(ctx);
+  app.post(
+    "/games/:slug/join",
+    (ctx) =>
+      act(ctx, async ({ user, kv, game }) => {
+        const result = await joinGame(kv, game.id, user);
+        await flush(kv, result.effects);
 
-    try {
-      const result = await leaveGame(kv, game.id, user.id);
-      await flush(kv, result.effects);
-      await audit(kv, {
-        actorId: user.id,
-        action: "signup.left",
-        targetId: game.id,
-        groupId: game.groupId,
-        ip: clientIp(ctx.req),
-      });
+        return result.outcome === "confirmed"
+          ? { action: "signup.joined", notice: "You are in. See you on court." }
+          : {
+            action: "signup.waitlisted",
+            notice:
+              "You are on the waitlist — we will let you know if a spot opens.",
+          };
+      }),
+  );
 
-      return backToGame(game.slug, {
-        notice: result.signup.payment === "forfeited"
-          ? "You are off the roster. The cutoff has passed, so your share is still owed."
-          : "You are off the roster.",
-      });
-    } catch (error) {
-      if (error instanceof SignupError) {
-        return backToGame(game.slug, { error: error.message });
-      }
-      throw error;
-    }
-  });
+  app.post(
+    "/games/:slug/leave",
+    (ctx) =>
+      act(ctx, async ({ user, kv, game }) => {
+        const result = await leaveGame(kv, game.id, user.id);
+        await flush(kv, result.effects);
 
-  app.post("/games/:slug/confirm", async (ctx) => {
-    const { user, kv, game } = await begin(ctx);
+        return {
+          action: "signup.left",
+          notice: result.signup.payment === "forfeited"
+            ? "You are off the roster. The cutoff has passed, so your share is still owed."
+            : "You are off the roster.",
+        };
+      }),
+  );
 
-    try {
-      await confirmPromotion(kv, game.id, user.id);
-      await audit(kv, {
-        actorId: user.id,
-        action: "signup.promotion_confirmed",
-        targetId: game.id,
-        groupId: game.groupId,
-        ip: clientIp(ctx.req),
-      });
-      return backToGame(game.slug, { notice: "Your spot is confirmed." });
-    } catch (error) {
-      if (error instanceof SignupError) {
-        return backToGame(game.slug, { error: error.message });
-      }
-      throw error;
-    }
-  });
+  app.post(
+    "/games/:slug/confirm",
+    (ctx) =>
+      act(ctx, async ({ user, kv, game }) => {
+        await confirmPromotion(kv, game.id, user.id);
+        return {
+          action: "signup.promotion_confirmed",
+          notice: "Your spot is confirmed.",
+        };
+      }),
+  );
 
-  app.post("/games/:slug/guests", async (ctx) => {
-    const { user, kv, form, game } = await begin(ctx);
+  app.post(
+    "/games/:slug/guests",
+    (ctx) =>
+      act(ctx, async ({ user, kv, form, game }) => {
+        const name = cleanText(form.get("guestName")?.toString() ?? "", 60);
+        if (name.length < 2) {
+          return backToGame(game.slug, {
+            error:
+              "Give your guest's name so the organizer knows who to expect.",
+          });
+        }
 
-    const name = cleanText(form.get("guestName")?.toString() ?? "", 60);
-    if (name.length < 2) {
-      return backToGame(game.slug, {
-        error: "Give your guest's name so the organizer knows who to expect.",
-      });
-    }
+        await addGuest(kv, game.id, user.id, { name });
+        return { action: "guest.added", notice: `${name} is on the list.` };
+      }),
+  );
 
-    try {
-      await addGuest(kv, game.id, user.id, { name });
-      await audit(kv, {
-        actorId: user.id,
-        action: "guest.added",
-        targetId: game.id,
-        groupId: game.groupId,
-        ip: clientIp(ctx.req),
-      });
-      return backToGame(game.slug, { notice: `${name} is on the list.` });
-    } catch (error) {
-      if (error instanceof SignupError) {
-        return backToGame(game.slug, { error: error.message });
-      }
-      throw error;
-    }
-  });
+  app.post(
+    "/games/:slug/guests/remove",
+    (ctx) =>
+      act(ctx, async ({ user, kv, form, game }) => {
+        const guestId = form.get("guestId")?.toString() ?? "";
+        const result = await removeGuest(kv, game.id, user.id, guestId);
+        await flush(kv, result.effects);
 
-  app.post("/games/:slug/guests/remove", async (ctx) => {
-    const { user, kv, form, game } = await begin(ctx);
-    const guestId = form.get("guestId")?.toString() ?? "";
-
-    try {
-      const result = await removeGuest(kv, game.id, user.id, guestId);
-      await flush(kv, result.effects);
-      await audit(kv, {
-        actorId: user.id,
-        action: "guest.removed",
-        targetId: game.id,
-        groupId: game.groupId,
-        ip: clientIp(ctx.req),
-      });
-      return backToGame(game.slug, { notice: "Guest removed." });
-    } catch (error) {
-      if (error instanceof SignupError) {
-        return backToGame(game.slug, { error: error.message });
-      }
-      throw error;
-    }
-  });
+        return { action: "guest.removed", notice: "Guest removed." };
+      }),
+  );
 }
