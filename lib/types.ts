@@ -221,6 +221,14 @@ export interface Signup {
 
   remindersSent: ReminderTag[];
   attendedAt?: string;
+  /**
+   * Set when the organizer marks a player absent.
+   *
+   * `attendedAt` alone cannot express this: its absence means "not marked
+   * yet", which is not the same as "marked as a no-show" and must not count
+   * against anyone. The two fields are mutually exclusive.
+   */
+  markedAbsentAt?: string;
   cancelledAt?: string;
   createdAt: string;
   updatedAt: string;

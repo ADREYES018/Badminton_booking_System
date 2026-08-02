@@ -93,6 +93,7 @@ export const keys = {
     ["matches_by_user", userId, ts, matchId] as const,
   matchesByGame: (gameId: string, matchId: string) =>
     ["matches_by_game", gameId, matchId] as const,
+  matchesByGamePrefix: (gameId: string) => ["matches_by_game", gameId] as const,
   stats: (groupId: string, userId: string) =>
     ["stats", groupId, userId] as const,
   leaderboard: (groupId: string, sortKey: string, userId: string) =>
