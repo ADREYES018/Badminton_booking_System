@@ -56,7 +56,7 @@ import {
   nowIso,
   promotionWindow,
 } from "../domain/time.ts";
-import { currentSplit } from "../domain/money.ts";
+import { amountOwed, currentSplit } from "../domain/money.ts";
 import {
   guestsAllowed,
   JOIN_BLOCK_MESSAGES,
@@ -777,7 +777,8 @@ export async function expirePromotion(
 }
 
 /**
- * Freezes the roster at the cutoff and locks the per-head cost.
+ * Freezes the roster at the cutoff, locks the per-head cost, and writes what
+ * each confirmed player owes.
  *
  * Runs from the queue, and again lazily on read as a safety net. Idempotent by
  * checking `rosterFrozenAt`, and self-correcting: if the organizer pushed the
@@ -785,6 +786,24 @@ export async function expirePromotion(
  * arrived, so this reschedules itself instead of freezing early. Deno KV
  * cannot cancel an enqueued message, which is why the handler has to be the
  * one to notice.
+ *
+ * ## Why `owedFils` is written here and never recalculated
+ *
+ * The per-head figure alone does not say what one player owes — someone who
+ * brought a guest owes their own share plus the guest's, and under `flat_fee`
+ * or `free` pricing that is not a multiple of anything. So each signup gets
+ * its own total, computed once against the frozen split.
+ *
+ * Once written it never moves. A player who joins after the cutoff pays the
+ * frozen rate and reduces nobody's bill; the organizer absorbs the difference.
+ * The alternative — recomputing as the roster churns — means a player who has
+ * already transferred money can silently become owed a refund, and there is no
+ * good moment to tell them. "The cutoff decides what you owe" is a rule a
+ * player can act on.
+ *
+ * The roster is written in the same atomic operation as the game, so a freeze
+ * either locks everything or nothing. A partial freeze would leave some
+ * players owing a figure derived from a split that no longer exists.
  */
 export async function freezeRoster(
   kv: Deno.Kv,
@@ -809,20 +828,206 @@ export async function freezeRoster(
     if (!current || current.rosterFrozenAt) return null;
 
     const split = currentSplit(current);
+    const now = nowIso();
     const next: Game = {
       ...current,
       frozenPerHeadFils: split.perHeadFils,
-      rosterFrozenAt: nowIso(),
-      updatedAt: nowIso(),
+      rosterFrozenAt: now,
+      updatedAt: now,
     };
 
+    let op = kv.atomic().check(entry).set(keys.game(gameId), next);
+
+    // Only confirmed players owe anything. A held seat is not a bill: the
+    // player never accepted it, which is the whole reason pendingCount is
+    // kept out of the cost divisor.
+    const confirmed = await listRoster(kv, gameId, "confirmed");
+    for (const signup of confirmed) {
+      const entryForSignup = await getRecord<Signup>(
+        kv,
+        keys.signup(gameId, signup.userId),
+      );
+      // Someone left between the listing and here; the retry will re-read.
+      if (!entryForSignup.value) continue;
+
+      op = op
+        .check(entryForSignup)
+        .set(
+          keys.signup(gameId, signup.userId),
+          {
+            ...entryForSignup.value,
+            owedFils: amountOwed(entryForSignup.value, split),
+            updatedAt: now,
+          } satisfies Signup,
+        );
+    }
+
+    return { op, result: true };
+  });
+
+  return { frozen: result === true, rescheduled: false };
+}
+
+export interface PaymentResult {
+  signup: Signup;
+}
+
+/**
+ * A player states they have transferred their share.
+ *
+ * This is a claim, not a confirmation — the money moves by bank transfer
+ * outside the app, so nothing here can verify it arrived. The organizer
+ * confirms separately. Keeping the two apart means a player has a record of
+ * having paid even before the organizer gets to their bank statement, and a
+ * disagreement is visible as `marked_paid` rather than hidden.
+ */
+export async function markPaid(
+  kv: Deno.Kv,
+  gameId: string,
+  userId: string,
+): Promise<Signup> {
+  const result = await withRetry(kv, async (kv) => {
+    const entry = await getRecord<Signup>(kv, keys.signup(gameId, userId));
+    const signup = entry.value;
+    if (!signup) throw new SignupError("You are not signed up for this game.");
+    if (signup.status !== "confirmed") {
+      throw new SignupError("Only confirmed players have a share to pay.");
+    }
+    if (signup.owedFils === undefined) {
+      throw new SignupError(
+        "The roster has not closed yet, so there is nothing to pay.",
+      );
+    }
+    // Already confirmed by the organizer: a later claim must not undo that.
+    if (signup.payment === "paid" || signup.payment === "refunded") {
+      return null;
+    }
+
     return {
-      op: kv.atomic().check(entry).set(keys.game(gameId), next),
+      op: kv.atomic().check(entry).set(
+        keys.signup(gameId, userId),
+        {
+          ...signup,
+          payment: "marked_paid",
+          paidMarkedAt: nowIso(),
+          updatedAt: nowIso(),
+        } satisfies Signup,
+      ),
       result: true,
     };
   });
 
-  return { frozen: result === true, rescheduled: false };
+  if (result === null) {
+    const current = await getSignup(kv, gameId, userId);
+    if (current) return current;
+  }
+  if (!result) throw new ConflictError("That did not go through.");
+
+  const updated = await getSignup(kv, gameId, userId);
+  if (!updated) throw new ConflictError("That did not go through.");
+  return updated;
+}
+
+/**
+ * The organizer confirms money actually arrived.
+ *
+ * This is the authoritative state — `marked_paid` is the player's word,
+ * `paid` is the organizer's. The organizer may confirm a payment the player
+ * never marked, since plenty of people transfer without touching the app.
+ */
+export async function confirmPaid(
+  kv: Deno.Kv,
+  gameId: string,
+  userId: string,
+  confirmedBy: string,
+): Promise<Signup> {
+  const result = await withRetry(kv, async (kv) => {
+    const entry = await getRecord<Signup>(kv, keys.signup(gameId, userId));
+    const signup = entry.value;
+    if (!signup) throw new SignupError("That player is not on this roster.");
+    if (signup.owedFils === undefined) {
+      throw new SignupError("The roster has not closed yet.");
+    }
+    if (signup.payment === "paid") return null;
+
+    const now = nowIso();
+    return {
+      op: kv.atomic().check(entry).set(
+        keys.signup(gameId, userId),
+        {
+          ...signup,
+          payment: "paid",
+          paidConfirmedAt: now,
+          paidConfirmedBy: confirmedBy,
+          updatedAt: now,
+        } satisfies Signup,
+      ),
+      result: true,
+    };
+  });
+
+  if (result === null) {
+    const current = await getSignup(kv, gameId, userId);
+    if (current) return current;
+  }
+  if (!result) throw new ConflictError("That did not go through.");
+
+  const updated = await getSignup(kv, gameId, userId);
+  if (!updated) throw new ConflictError("That did not go through.");
+  return updated;
+}
+
+export interface Settlement {
+  owedFils: number;
+  collectedFils: number;
+  outstandingFils: number;
+  paidCount: number;
+  markedCount: number;
+  unpaidCount: number;
+}
+
+/**
+ * What the organizer is owed for a game and how much has come in.
+ *
+ * `marked_paid` counts as outstanding, not collected — until the organizer
+ * confirms it, the money is only claimed. Reporting it as collected would
+ * make the figure that matters most, "how much am I still out of pocket",
+ * the one most likely to be wrong.
+ */
+export async function settlementFor(
+  kv: Deno.Kv,
+  gameId: string,
+): Promise<Settlement> {
+  const confirmed = await listRoster(kv, gameId, "confirmed");
+
+  let owedFils = 0;
+  let collectedFils = 0;
+  let paidCount = 0;
+  let markedCount = 0;
+  let unpaidCount = 0;
+
+  for (const signup of confirmed) {
+    const owed = signup.owedFils ?? 0;
+    owedFils += owed;
+
+    if (signup.payment === "paid") {
+      collectedFils += owed;
+      paidCount++;
+    } else if (signup.payment === "marked_paid") {
+      markedCount++;
+    } else {
+      unpaidCount++;
+    }
+  }
+
+  return {
+    owedFils,
+    collectedFils,
+    outstandingFils: owedFils - collectedFils,
+    paidCount,
+    markedCount,
+    unpaidCount,
+  };
 }
 
 export interface RosterEntry {
