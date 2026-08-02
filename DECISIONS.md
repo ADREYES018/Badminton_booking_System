@@ -186,3 +186,80 @@ local KV database also matched `lib/data/`, so nine files — every data-layer
 module from both phases — were never committed and a fresh clone would not have
 built. Now anchored as `/data/`. Verified by cloning the repository and running
 the suite from the clone.
+
+## Phase 3 — Payments, reminders, refunds and results
+
+### The cutoff decides the bill, permanently
+
+`freezeRoster` now writes each confirmed signup its own `owedFils` alongside the
+game's per-head figure. Per-head alone is not a bill: a player who brought a
+guest owes their share plus the guest's, and under `flat_fee` or `free` pricing
+that is not a multiple of anything.
+
+Once written the figure never moves. A player joining after the cutoff pays the
+frozen rate and reduces nobody else's bill; the organizer absorbs the
+difference. The alternative — recomputing as the roster churns — means someone
+who has already transferred money can silently become owed a refund, with no
+good moment to tell them. "The cutoff decides what you owe" is a rule a player
+can act on; "your share may move after you have paid it" is not.
+
+The roster is written in the same atomic operation as the game, so a freeze
+locks everything or nothing. A partial freeze would leave some players owing a
+figure derived from a split that no longer exists.
+
+### A claim and a confirmation are different facts
+
+`marked_paid` is the player's word, `paid` is the organizer's. The money moves
+by bank transfer outside the app, so nothing in it can verify arrival. Keeping
+the two apart means a player has a record of having paid before the organizer
+reaches their bank statement, and a disagreement is visible rather than hidden.
+
+`settlementFor` counts a claim as **outstanding**, not collected. "How much am I
+still out of pocket" is the figure that matters most to an organizer, so it is
+the one that must not be optimistic.
+
+A refunded share leaves both the owed and the collected totals. Counting it on
+one side only would make the two disagree by exactly the refunded amount.
+
+### Reminders are claimed before they are sent
+
+Queue delivery is at-least-once, so the real problem is not sending an email but
+not sending it three times. Each signup claims a `ReminderTag` under a
+versionstamp check _before_ its email goes out, so two concurrent deliveries
+cannot both win.
+
+That ordering means a send failing after the claim loses a reminder rather than
+repeating it. This is the right way round: a missed nudge is a smaller harm than
+a mailbox full of duplicates, and the next reminder in the schedule still
+arrives.
+
+The schedule is the one Phase 1 settled on — `pay` at the freeze, when a figure
+to pay first exists, then T-36h, T-24h and T-3h. Offsets already in the past are
+skipped rather than fired late.
+
+### A result counts only when the loser agrees
+
+Anyone on the roster may report a score, which means anyone may report a wrong
+one in their own favour. A match starts `pending` and reaches the leaderboard
+only once a player on the **losing** side confirms it — letting the winner
+confirm their own result would make the pending state decorative. Stats move
+only on the commit that actually confirmed, so a duplicate call cannot count one
+win twice.
+
+Score validation checks the shape of the claim, not its plausibility. Badminton
+scores vary by format, and an organizer correcting a genuine oddity is worse
+served by a rule that refuses it. A draw is rejected because there is no such
+thing.
+
+### Attendance has three states, not two
+
+`attendedAt` alone cannot distinguish "not marked yet" from "marked absent", and
+treating its absence as a no-show would count every unmarked player against
+themselves. `markedAbsentAt` is a separate field, mutually exclusive with it.
+
+**Bug found while building this phase:** marking a player absent was a silent
+no-op for exactly the players it was meant to record. The guard compared the
+requested state against `attendedAt !== undefined`, so "mark absent" on a player
+nobody had marked yet compared `false === false` and returned early. Caught by
+the no-show test on its first run. Correcting a mark now moves the count between
+columns rather than adding to both.
