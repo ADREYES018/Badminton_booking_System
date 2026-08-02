@@ -19,6 +19,7 @@
  */
 
 import { delayUntil } from "../domain/time.ts";
+import type { ReminderTag } from "../types.ts";
 
 export type QueueMessage =
   /** Freeze the roster and lock the per-head cost at the cutoff. */
@@ -35,15 +36,71 @@ export type QueueMessage =
      * message left over by an earlier promotion of the same player.
      */
     confirmDeadline: string;
-  };
+  }
+  /** Nudge the roster about an upcoming game and what they owe. */
+  | { kind: "reminder"; gameId: string; tag: ReminderTag };
 
 /** Narrows an untyped queue payload. Malformed messages are dropped. */
 export function isQueueMessage(value: unknown): value is QueueMessage {
   if (typeof value !== "object" || value === null) return false;
-  const message = value as { kind?: unknown; gameId?: unknown };
+  const message = value as { kind?: unknown; gameId?: unknown; tag?: unknown };
   if (typeof message.gameId !== "string") return false;
+  if (message.kind === "reminder") {
+    return REMINDER_TAGS.includes(message.tag as ReminderTag);
+  }
   return message.kind === "cutoff_freeze" || message.kind === "promote" ||
     message.kind === "promotion_expiry";
+}
+
+/**
+ * Reminder schedule, as hours before the game starts.
+ *
+ * "pay" fires at the cutoff, when the roster has just frozen and a figure to
+ * pay finally exists — the spec's T-72h payment reminder would have fired
+ * before payment was possible under a 48-hour cutoff. See DECISIONS.md.
+ */
+export const REMINDER_TAGS: readonly ReminderTag[] = [
+  "pay",
+  "t36",
+  "t24",
+  "t3",
+];
+
+const REMINDER_HOURS: Record<Exclude<ReminderTag, "pay">, number> = {
+  t36: 36,
+  t24: 24,
+  t3: 3,
+};
+
+/**
+ * Schedules every reminder a game still has coming.
+ *
+ * Called at the freeze, so "pay" goes out immediately and the rest are spaced
+ * by their offset. Reminders already in the past are skipped rather than fired
+ * late — telling someone about a game that started an hour ago helps nobody.
+ */
+export async function enqueueReminders(
+  kv: Deno.Kv,
+  gameId: string,
+  startUtc: string,
+): Promise<void> {
+  await kv.enqueue(
+    { kind: "reminder", gameId, tag: "pay" } satisfies QueueMessage,
+  );
+
+  const start = new Date(startUtc).getTime();
+  for (const [tag, hours] of Object.entries(REMINDER_HOURS)) {
+    const at = new Date(start - hours * 60 * 60 * 1000);
+    if (at.getTime() <= Date.now()) continue;
+    await kv.enqueue(
+      {
+        kind: "reminder",
+        gameId,
+        tag: tag as ReminderTag,
+      } satisfies QueueMessage,
+      { delay: delayUntil(at.toISOString()) },
+    );
+  }
 }
 
 /**

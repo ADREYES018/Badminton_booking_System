@@ -7,6 +7,9 @@
  * to the network.
  */
 
+import { formatFils } from "./domain/money.ts";
+import { formatGameTime } from "./domain/time.ts";
+
 const RESEND_ENDPOINT = "https://api.resend.com/emails";
 
 export interface EmailMessage {
@@ -123,6 +126,75 @@ export function magicLinkEmail(
       link,
       "",
       "Did not request this? Ignore this email.",
+    ].join("\n"),
+  };
+}
+
+/**
+ * Reminder about an upcoming game.
+ *
+ * Each tag answers a different question, so they do not share copy. "pay"
+ * fires at the cutoff and is about money; the countdown reminders are about
+ * turning up, and mention money only if it is still outstanding.
+ */
+export function reminderEmail(
+  to: string,
+  game: import("./types.ts").Game,
+  tag: import("./types.ts").ReminderTag,
+  owedFils: number,
+): EmailMessage {
+  const url = new URL(`/games/${game.slug}`, appUrl()).toString();
+  const when = formatGameTime(game.startUtc, game.endUtc);
+  const amount = formatFils(owedFils);
+
+  const copy: Record<typeof tag, { subject: string; lead: string }> = {
+    pay: {
+      subject: `The roster is set for ${game.title} — you owe ${amount}`,
+      lead:
+        `The roster has closed, so your share is settled at <strong>${amount}</strong>. ` +
+        `Send it to the club account and mark it paid on the game page.`,
+    },
+    t36: {
+      subject: `${game.title} is in a day and a half`,
+      lead: `${when} at ${
+        escapeHtml(game.venue.name)
+      }. Your share is ${amount}.`,
+    },
+    t24: {
+      subject: `${game.title} is tomorrow`,
+      lead: `${when} at ${
+        escapeHtml(game.venue.name)
+      }. Your share is ${amount}.`,
+    },
+    t3: {
+      subject: `${game.title} starts in about three hours`,
+      lead:
+        `${when} at ${
+          escapeHtml(game.venue.name)
+        }. See you on court — bring a ` +
+        `spare shirt.`,
+    },
+  };
+
+  const { subject, lead } = copy[tag];
+
+  return {
+    to,
+    subject,
+    html: layout(
+      game.title,
+      `<p style="font-size:16px;line-height:1.6;margin:0 0 8px;">${lead}</p>
+       ${button(url, "Open the game")}
+       <p style="font-size:13px;color:#444934;margin:0;">${
+        escapeHtml(game.venue.address)
+      }</p>`,
+    ),
+    text: [
+      subject,
+      "",
+      lead.replace(/<[^>]+>/g, ""),
+      "",
+      url,
     ].join("\n"),
   };
 }

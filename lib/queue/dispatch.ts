@@ -18,6 +18,7 @@ import {
   freezeRoster,
   promoteNext,
 } from "../data/signups.ts";
+import { sendReminder } from "../data/reminders.ts";
 import { isQueueMessage, type QueueMessage } from "./messages.ts";
 
 /**
@@ -57,6 +58,11 @@ export async function handleQueueMessage(
           message.confirmDeadline,
         );
         await flush(kv, result.effects);
+        break;
+      }
+
+      case "reminder": {
+        await sendReminder(kv, message.gameId, message.tag);
         break;
       }
     }

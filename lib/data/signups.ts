@@ -66,6 +66,7 @@ import {
   enqueueCutoffFreeze,
   enqueuePromotion,
   enqueuePromotionExpiry,
+  enqueueReminders,
 } from "../queue/messages.ts";
 import { cutoffAt } from "../domain/time.ts";
 
@@ -865,6 +866,15 @@ export async function freezeRoster(
     return { op, result: true };
   });
 
+  // Scheduled only on the commit that actually froze, and only after it — a
+  // retry that lost its race must not leave a set of reminders behind.
+  if (result === true) {
+    const frozen = await getRecord<Game>(kv, keys.game(gameId));
+    if (frozen.value) {
+      await enqueueReminders(kv, gameId, frozen.value.startUtc);
+    }
+  }
+
   return { frozen: result === true, rescheduled: false };
 }
 
@@ -977,13 +987,94 @@ export async function confirmPaid(
   return updated;
 }
 
+/**
+ * Records that money went back to a player.
+ *
+ * Like `confirmPaid`, this records a transfer that happened in a bank rather
+ * than performing one — the app never moves money. Only a payment that was
+ * actually confirmed can be refunded; refunding an unpaid signup would assert
+ * the organizer sent back money they never received.
+ *
+ * The player's own refund IBAN is the account this pays to, which is why that
+ * one is encrypted while the group's receiving IBAN is not.
+ */
+export async function refundPayment(
+  kv: Deno.Kv,
+  gameId: string,
+  userId: string,
+): Promise<Signup> {
+  const result = await withRetry(kv, async (kv) => {
+    const entry = await getRecord<Signup>(kv, keys.signup(gameId, userId));
+    const signup = entry.value;
+    if (!signup) throw new SignupError("That player is not on this roster.");
+    if (signup.payment === "refunded") return null;
+    if (signup.payment !== "paid") {
+      throw new SignupError(
+        "Only a confirmed payment can be refunded.",
+      );
+    }
+
+    return {
+      op: kv.atomic().check(entry).set(
+        keys.signup(gameId, userId),
+        {
+          ...signup,
+          payment: "refunded",
+          updatedAt: nowIso(),
+        } satisfies Signup,
+      ),
+      result: true,
+    };
+  });
+
+  if (result === null) {
+    const current = await getSignup(kv, gameId, userId);
+    if (current) return current;
+  }
+  if (!result) throw new ConflictError("That refund did not go through.");
+
+  const updated = await getSignup(kv, gameId, userId);
+  if (!updated) throw new ConflictError("That refund did not go through.");
+  return updated;
+}
+
+/**
+ * Cancels a game and marks every confirmed payment for refund.
+ *
+ * A cancelled game owes everyone their money back, so this is the one place
+ * a bulk refund makes sense. Players who never paid are left alone rather
+ * than marked refunded — there is nothing to send them.
+ *
+ * Returns the players whose payments need returning, so the organizer has a
+ * list to work from at their bank.
+ */
+export async function refundAllForGame(
+  kv: Deno.Kv,
+  gameId: string,
+): Promise<{ refunded: string[]; totalFils: number }> {
+  const confirmed = await listRoster(kv, gameId, "confirmed");
+  const refunded: string[] = [];
+  let totalFils = 0;
+
+  for (const signup of confirmed) {
+    if (signup.payment !== "paid") continue;
+    await refundPayment(kv, gameId, signup.userId);
+    refunded.push(signup.userId);
+    totalFils += signup.owedFils ?? 0;
+  }
+
+  return { refunded, totalFils };
+}
+
 export interface Settlement {
   owedFils: number;
   collectedFils: number;
   outstandingFils: number;
+  refundedFils: number;
   paidCount: number;
   markedCount: number;
   unpaidCount: number;
+  refundedCount: number;
 }
 
 /**
@@ -1002,12 +1093,23 @@ export async function settlementFor(
 
   let owedFils = 0;
   let collectedFils = 0;
+  let refundedFils = 0;
   let paidCount = 0;
   let markedCount = 0;
   let unpaidCount = 0;
+  let refundedCount = 0;
 
   for (const signup of confirmed) {
     const owed = signup.owedFils ?? 0;
+
+    if (signup.payment === "refunded") {
+      // Money that came in and went back out again. It is neither owed nor
+      // held, so it stays out of both the bill and the collected figure.
+      refundedFils += owed;
+      refundedCount++;
+      continue;
+    }
+
     owedFils += owed;
 
     if (signup.payment === "paid") {
@@ -1024,9 +1126,11 @@ export async function settlementFor(
     owedFils,
     collectedFils,
     outstandingFils: owedFils - collectedFils,
+    refundedFils,
     paidCount,
     markedCount,
     unpaidCount,
+    refundedCount,
   };
 }
 
