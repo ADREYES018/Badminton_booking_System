@@ -145,6 +145,7 @@ export interface ProfileUpdate {
   emailOptIn?: boolean;
   hasPhoto?: boolean;
   iban?: StoredIban | null;
+  checkinVersion?: number;
 }
 
 /**
@@ -171,6 +172,9 @@ export async function updateUser(
     if (update.hasPhoto !== undefined) next.hasPhoto = update.hasPhoto;
     if (update.iban !== undefined) {
       next.iban = update.iban === null ? undefined : update.iban;
+    }
+    if (update.checkinVersion !== undefined) {
+      next.checkinVersion = update.checkinVersion;
     }
 
     let op = kv.atomic().check(entry).set(keys.user(userId), next);

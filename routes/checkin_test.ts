@@ -26,6 +26,7 @@ const { seedGame, seedPlayer } = await import("../lib/testing/fixtures.ts");
 const { getSignup, joinGame } = await import("../lib/data/signups.ts");
 const { getStats } = await import("../lib/data/matches.ts");
 const { mintCheckinToken } = await import("../lib/domain/checkin.ts");
+const { updateUser } = await import("../lib/data/users.ts");
 type User = import("../lib/types.ts").User;
 
 const handler = app.handler();
@@ -70,7 +71,7 @@ async function gameWithPlayer() {
 Deno.test("a scanned code marks the player present and names them back", async () => {
   const { game, groupId, player, organizer } = await gameWithPlayer();
   const auth = await signIn(organizer);
-  const token = await mintCheckinToken(game.id, player.id);
+  const token = await mintCheckinToken(player.id);
 
   const response = await post(`/games/${game.slug}/checkin`, auth, { token });
   const body = await response.json();
@@ -89,7 +90,7 @@ Deno.test("a scanned code marks the player present and names them back", async (
 Deno.test("a player cannot scan their own code to mark themselves in", async () => {
   const { game, groupId, player } = await gameWithPlayer();
   const auth = await signIn(player);
-  const token = await mintCheckinToken(game.id, player.id);
+  const token = await mintCheckinToken(player.id);
 
   // The token is genuinely theirs. The guard is what refuses this, which is
   // the whole reason the scan points from the organizer to the player.
@@ -102,25 +103,6 @@ Deno.test("a player cannot scan their own code to mark themselves in", async () 
     undefined,
   );
   assertEquals((await getStats(kv, groupId, player.id)).attended, 0);
-});
-
-Deno.test("a code minted for another game is refused", async () => {
-  const first = await gameWithPlayer();
-  const second = await gameWithPlayer();
-  const auth = await signIn(second.organizer);
-
-  const token = await mintCheckinToken(first.game.id, first.player.id);
-  const response = await post(`/games/${second.game.slug}/checkin`, auth, {
-    token,
-  });
-  const body = await response.json();
-
-  assertEquals(response.status, 400);
-  assertEquals(body.ok, false);
-  assertEquals(
-    (await getSignup(kv, first.game.id, first.player.id))?.attendedAt,
-    undefined,
-  );
 });
 
 Deno.test("an unreadable code comes back as a message, not a crash", async () => {
@@ -141,7 +123,7 @@ Deno.test("an unreadable code comes back as a message, not a crash", async () =>
 Deno.test("scanning the same code twice does not double-count", async () => {
   const { game, groupId, player, organizer } = await gameWithPlayer();
   const auth = await signIn(organizer);
-  const token = await mintCheckinToken(game.id, player.id);
+  const token = await mintCheckinToken(player.id);
 
   for (let i = 0; i < 2; i++) {
     const response = await post(`/games/${game.slug}/checkin`, auth, { token });
@@ -152,14 +134,54 @@ Deno.test("scanning the same code twice does not double-count", async () => {
 });
 
 Deno.test("a code for someone not on the roster is refused", async () => {
+  // The token is genuine and the scanner is a real organizer. Before this
+  // phase the game inside the token refused this; now the roster does.
   const { game, organizer } = await gameWithPlayer();
   const outsider = await seedPlayer(kv);
   const auth = await signIn(organizer);
 
-  const token = await mintCheckinToken(game.id, outsider.id);
+  const token = await mintCheckinToken(outsider.id);
   const response = await post(`/games/${game.slug}/checkin`, auth, { token });
   const body = await response.json();
 
   assertEquals(response.status, 400);
   assertEquals(body.ok, false);
+});
+
+Deno.test("a code carrying no game still marks a confirmed player present", async () => {
+  // The same protection the deleted per-game test gave, now proved through a
+  // token that names only the player.
+  const { game, player, organizer } = await gameWithPlayer();
+  const auth = await signIn(organizer);
+
+  const response = await post(`/games/${game.slug}/checkin`, auth, {
+    token: await mintCheckinToken(player.id),
+  });
+
+  assertEquals(response.status, 200);
+  assertEquals((await response.json()).userId, player.id);
+  assertEquals(
+    typeof (await getSignup(kv, game.id, player.id))?.attendedAt,
+    "string",
+  );
+});
+
+Deno.test("a superseded code is refused after the player replaces it", async () => {
+  const { game, player, organizer } = await gameWithPlayer();
+
+  const leaked = await mintCheckinToken(player.id, 1);
+  await updateUser(kv, player.id, { checkinVersion: 2 });
+
+  const auth = await signIn(organizer);
+  const response = await post(`/games/${game.slug}/checkin`, auth, {
+    token: leaked,
+  });
+  const body = await response.json();
+
+  assertEquals(response.status, 400);
+  assertEquals(body.ok, false);
+  assertEquals(
+    (await getSignup(kv, game.id, player.id))?.attendedAt,
+    undefined,
+  );
 });

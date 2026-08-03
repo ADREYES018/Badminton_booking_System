@@ -20,13 +20,18 @@ import {
 import { act, backToGame, begin } from "./game_action.ts";
 import {
   confirmPaid,
+  getSignup,
   markPaid,
   refundPayment,
   SignupError,
 } from "../lib/data/signups.ts";
 import { audit } from "../lib/data/audit.ts";
 import { getUser } from "../lib/data/users.ts";
-import { CheckinError, verifyCheckinToken } from "../lib/domain/checkin.ts";
+import {
+  CheckinError,
+  checkinVersionOf,
+  verifyCheckinToken,
+} from "../lib/domain/checkin.ts";
 import {
   confirmMatch,
   listMatchesForGame,
@@ -186,13 +191,25 @@ export function gameActionRoutes(app: App<State>) {
   // ---- Check-in -----------------------------------------------------------
 
   /**
-   * Marks a player present from a scanned code.
+   * Scanning a code.
    *
    * The only JSON endpoint in the app. Every other action is a form POST that
    * redirects, but a scanner works through a queue: reloading the page between
    * players would lose the camera stream and the organizer's place in the
    * line. The reply carries the player's name so the island can confirm who
    * was just admitted.
+   *
+   * Four gates, in order: the scanner must be an organizer of this game's
+   * club, the code must verify, its version must still be the player's
+   * current one, and the player must be confirmed on this game's roster.
+   *
+   * The last is load-bearing. The code carries no game and never expires, so
+   * without a roster check a code scanned anywhere would mark its owner
+   * present anywhere.
+   *
+   * The version gate cannot live in verification: a superseded code still
+   * verifies as its own old version, and only the stored record knows which
+   * version is current.
    *
    * The organizer guard is what makes the direction of the scan safe — the
    * POST comes from the organizer's browser carrying a token the player
@@ -213,7 +230,26 @@ export function gameActionRoutes(app: App<State>) {
 
     try {
       const token = form.get("token")?.toString() ?? "";
-      const claim = await verifyCheckinToken(token, game.id);
+      const claim = await verifyCheckinToken(token);
+
+      const player = await getUser(kv, claim.userId);
+      if (!player) {
+        throw new CheckinError("That code belongs to no one.");
+      }
+
+      // A code the player has replaced is dead, whoever is holding it.
+      if (claim.version !== checkinVersionOf(player)) {
+        throw new CheckinError(
+          "That code has been replaced. Ask for the current one.",
+        );
+      }
+
+      const signup = await getSignup(kv, game.id, claim.userId);
+      if (signup?.status !== "confirmed") {
+        throw new CheckinError(
+          `${player.name} is not on the roster for this game.`,
+        );
+      }
 
       await setAttendance(kv, game.id, claim.userId, true, {
         groupId: game.groupId,
@@ -227,11 +263,10 @@ export function gameActionRoutes(app: App<State>) {
         ip: clientIp(ctx.req),
       });
 
-      const player = await getUser(kv, claim.userId);
       return reply(200, {
         ok: true,
         userId: claim.userId,
-        name: player?.name ?? "Player",
+        name: player.name,
       });
     } catch (error) {
       // A bad code is an ordinary event at a door — a stale screenshot, a
