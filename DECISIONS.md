@@ -318,3 +318,59 @@ rather than the game page. `act` treats a bare `Response` as a validation
 failure that changed nothing and skips the audit entry — so the two actions that
 move money left no record of who moved it. An outcome may now carry a `redirect`
 without giving up its entry.
+
+## Phase 5 — QR check-in
+
+### Players show, the organizer scans
+
+The direction of the scan is a security decision, not an ergonomic one. The
+check-in POST comes from the organizer's browser carrying a token the player
+displayed, so `setAttendance` stays organizer-guarded and a player replaying
+their own valid token is still refused.
+
+The other direction — one code on the organizer's screen that players scan —
+would have meant either dropping that guard or trusting the roster entirely, and
+would have made a forwarded screenshot enough to mark yourself present from
+home.
+
+### The token expires, and admits that is all it does
+
+`HMAC(APP_SECRET, gameId:userId:window)` over a five-minute bucket, verified
+against the current bucket and the previous one. It proves _this player, this
+game, recently_ — it does not prove presence, and nothing can.
+
+What it buys is that a code screenshotted the night before is useless, which is
+the realistic abuse. A code rotating every few seconds would be stronger on
+paper and would trade a marginal gain for clock skew at a venue with bad signal.
+
+### A hand-written QR encoder rather than a dependency
+
+`lib/qr/encode.ts` is byte mode, level M, versions 1–6 — enough for a token with
+room to spare and nothing else. A general-purpose library would ship several
+hundred kilobytes into a PWA that otherwise sends one small island.
+
+The encoder is tested against verified fixtures rather than against itself,
+which is what caught all three bugs in the first draft. Each produced a matrix
+with correct finder patterns, correct dimensions, and no readable content:
+format bits placed least-significant-first, a reversed generator polynomial, and
+a mistyped coordinate near the timing row. An encoder that agrees with itself
+proves nothing.
+
+### The scanner has a fallback that predates it
+
+Decoding uses the browser's own `BarcodeDetector`. Where it is absent — Firefox,
+older Safari — the island says so and points at the Phase 4 manual toggles
+sitting directly below it on the same screen. That is a real fallback rather
+than a degraded one: marking the roster by hand was the only method before this
+phase, and it still works.
+
+The two live on one screen deliberately. An organizer at a door who has to
+change pages to mark the one person whose phone is flat will stop using the
+scanner.
+
+### The one JSON endpoint
+
+Every other action in the app is a form POST that redirects. The scan is not:
+reloading the page between players would drop the camera stream and the
+organizer's place in the queue. A refused code returns a message rather than an
+error status page, because a stale screenshot at a door is an ordinary event.

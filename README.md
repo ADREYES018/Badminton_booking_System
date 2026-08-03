@@ -61,7 +61,7 @@ checker flags.
 
 ## Status
 
-Phases 1–4 are complete:
+Phases 1–5 are complete:
 
 - **Phase 1** — magic-link auth, sessions, role guards, profiles with encrypted
   refund IBANs, the KV layer, and the PWA shell.
@@ -71,7 +71,9 @@ Phases 1–4 are complete:
 - **Phase 4** — those last three in the UI: paying a share and settling a game,
   reporting a result and confirming it, marking the roster, and the stats page
   with the group leaderboard.
+- **Phase 5** — QR check-in: a player shows a signed, short-lived code and the
+  organizer scans it at the door, with the manual toggles on the same screen for
+  whoever's phone is flat.
 
-**Phase 5** — QR check-in — is still outstanding, as is group management
-(deferred in Phase 2: the app seeds and uses a single club). Both are described
-in `DECISIONS.md` and the build spec.
+Group management remains deferred (Phase 2: the app seeds and uses a single
+club). It is described in `DECISIONS.md` and the build spec.
