@@ -1,15 +1,15 @@
 /**
- * Builders for the records Phase 2 tests need.
+ * Builders for the records tests need.
  *
  * These exist so a test that cares about one field does not have to spell out
  * the other twenty, and so that adding a required field to `Game` breaks one
  * file rather than every test at once.
  */
 
-import type { Game, GuestPricing, User } from "../types.ts";
+import type { Game, GroupRole, GuestPricing, User } from "../types.ts";
 import { createUser } from "../data/users.ts";
 import { createGame } from "../data/games.ts";
-import { ensureDefaultGroup } from "../data/groups.ts";
+import { ensureDefaultGroup, ensureMembership } from "../data/groups.ts";
 
 const HOUR_MS = 60 * 60 * 1000;
 
@@ -62,6 +62,22 @@ export async function seedGame(
   });
 
   return { game, organizer, groupId: group.id };
+}
+
+/**
+ * Joins a user to a group.
+ *
+ * Nothing joins anyone automatically any more, so a test whose player needs to
+ * act on a game has to say so — the same explicit act the invite flow performs
+ * in production.
+ */
+export async function seedMember(
+  kv: Deno.Kv,
+  groupId: string,
+  user: User,
+  role: GroupRole = "player",
+): Promise<void> {
+  await ensureMembership(kv, groupId, user.id, role);
 }
 
 /** Creates `count` players, each with a unique email. */

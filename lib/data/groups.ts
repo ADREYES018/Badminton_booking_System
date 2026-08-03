@@ -1,27 +1,41 @@
 /**
- * Groups and membership.
+ * Groups, membership, and the invites that grant it.
  *
- * Phase 2 runs a single club: one group is seeded on demand and every signed-in
- * user joins it automatically. The records are nevertheless real `Group` and
- * `Membership` rows behind the same key schema a multi-group build would use,
- * so adding a second group later is a routing and UI problem rather than a
- * migration.
+ * A user belongs to a group only by an explicit act: they created it, an
+ * organizer added them, or they redeemed an invite link. Nothing joins anyone
+ * automatically — a page view is not consent to appear on a club's roster.
  *
- * `ensureDefaultGroup` is idempotent and safe to call concurrently: the slug
- * index is reserved inside the same atomic commit that writes the record, the
- * same way `createUser` reserves an email. Correctness therefore does not
- * depend on `main.ts` having run first, which matters because tests call the
- * data layer directly.
+ * `ensureDefaultGroup` survives for the demo seeder and the test fixtures,
+ * which want one deterministic club without going through the UI. It is
+ * idempotent and safe to call concurrently: the slug index is reserved inside
+ * the same atomic commit that writes the record, the same way `createUser`
+ * reserves an email.
  */
 
 import { ulid } from "@std/ulid";
 import { keys } from "../kv/keys.ts";
 import { getRecord, listRecords, withRetry } from "../kv/kv.ts";
-import type { Group, GroupRole, Membership, PayoutDetails } from "../types.ts";
+import type {
+  Group,
+  GroupInvite,
+  GroupRole,
+  Membership,
+  PayoutDetails,
+} from "../types.ts";
 import { nowIso } from "../domain/time.ts";
+import { randomToken, sha256Hex } from "../crypto.ts";
+import { getUserByEmail } from "./users.ts";
 
-/** Slug of the club every Phase 2 user belongs to. */
+/** Slug of the club the demo seeder and the test fixtures use. */
 export const DEFAULT_GROUP_SLUG = "smash-club";
+
+/**
+ * How long an invite link stays usable.
+ *
+ * Long enough to be shared and acted on over a weekend, short enough that a
+ * link pasted into a group chat and forgotten does not stay a way in forever.
+ */
+export const INVITE_TTL_MS = 7 * 24 * 60 * 60 * 1000;
 
 /** Matches the spec's cancellation window; overridable per game. */
 export const DEFAULT_CUTOFF_HOURS = 48;
@@ -107,6 +121,80 @@ export async function ensureDefaultGroup(
     ownerId,
     description: "Badminton sessions in Dubai.",
   });
+}
+
+export interface UpdateGroupInput {
+  name?: string;
+  description?: string | null;
+  defaultCutoffHours?: number;
+}
+
+export async function updateGroup(
+  kv: Deno.Kv,
+  groupId: string,
+  update: UpdateGroupInput,
+): Promise<Group> {
+  const result = await withRetry(kv, async (kv) => {
+    const entry = await getRecord<Group>(kv, keys.group(groupId));
+    if (!entry.value) throw new Error(`Group ${groupId} not found`);
+
+    const next: Group = { ...entry.value, updatedAt: nowIso() };
+    if (update.name !== undefined) next.name = update.name;
+    if (update.description !== undefined) {
+      next.description = update.description ?? undefined;
+    }
+    if (update.defaultCutoffHours !== undefined) {
+      next.defaultCutoffHours = update.defaultCutoffHours;
+    }
+
+    return {
+      op: kv.atomic().check(entry).set(keys.group(groupId), next),
+      result: next,
+    };
+  });
+  if (!result) throw new Error("Group update did not apply");
+  return result;
+}
+
+/**
+ * Creates a group and seats its creator as the first organizer.
+ *
+ * The membership is a second commit rather than part of the group's own atomic
+ * write: it is not required for the slug reservation to be correct, and a
+ * membership row without its group would be the worse failure of the two.
+ */
+export async function createGroupForOwner(
+  kv: Deno.Kv,
+  input: CreateGroupInput,
+): Promise<Group> {
+  const group = await createGroup(kv, input);
+  await ensureMembership(kv, group.id, input.ownerId, "organizer");
+  return group;
+}
+
+/**
+ * Every group a user belongs to.
+ *
+ * Reads the `membersByUser` index, which stores a pointer per membership. A
+ * pointer whose group has vanished is skipped rather than throwing — an index
+ * entry outliving its record is a repairable inconsistency, not a reason to
+ * fail someone's group list.
+ */
+export async function listGroupsForUser(
+  kv: Deno.Kv,
+  userId: string,
+  limit = 50,
+): Promise<Group[]> {
+  const pointers = await listRecords<string>(
+    kv,
+    { prefix: ["members_by_user", userId] },
+    { limit },
+  );
+
+  const groups = await Promise.all(
+    pointers.map((pointer) => getGroup(kv, pointer.value)),
+  );
+  return groups.filter((group): group is Group => group !== null);
 }
 
 export async function getMembership(
@@ -252,4 +340,116 @@ export async function listMembers(
     { limit },
   );
   return rows.map((r) => r.value);
+}
+
+/** A membership request that failed for a reason the organizer should read. */
+export class MembershipError extends Error {}
+
+/**
+ * Adds an existing account to a group by email address.
+ *
+ * An email with no account is refused rather than pre-creating a placeholder
+ * membership: that would let an organizer probe which addresses have ever
+ * signed up. Someone without an account gets an invite link instead.
+ */
+export async function addMemberByEmail(
+  kv: Deno.Kv,
+  groupId: string,
+  email: string,
+  role: GroupRole = "player",
+): Promise<Membership> {
+  const user = await getUserByEmail(kv, email);
+  if (!user) {
+    throw new MembershipError(
+      "No account uses that email yet. Send them an invite link instead.",
+    );
+  }
+  return await ensureMembership(kv, groupId, user.id, role);
+}
+
+/** An invite that cannot be redeemed, with a reason worth showing the user. */
+export class InviteError extends Error {}
+
+export interface IssuedInvite {
+  /** The raw token, put in the link. Never stored. */
+  token: string;
+  expiresAt: string;
+}
+
+export async function issueGroupInvite(
+  kv: Deno.Kv,
+  groupId: string,
+  createdBy: string,
+): Promise<IssuedInvite> {
+  const token = randomToken(32);
+  const hash = await sha256Hex(token);
+  const expiresAt = new Date(Date.now() + INVITE_TTL_MS).toISOString();
+
+  const invite: GroupInvite = {
+    v: 1,
+    groupId,
+    createdBy,
+    createdAt: nowIso(),
+    expiresAt,
+  };
+
+  await kv.set(keys.groupInvite(hash), invite, { expireIn: INVITE_TTL_MS });
+  return { token, expiresAt };
+}
+
+/**
+ * Redeems an invite, joining the redeemer as a player.
+ *
+ * Single use: the write is checked against the read, so two taps on the same
+ * link cannot both succeed. The spent record is marked rather than deleted and
+ * expires on its own — an invite link lives in a chat thread and gets tapped
+ * again, and "already used" is a far better answer than "no such invite".
+ *
+ * An invite never grants organizer rights: promotion is a deliberate act on the
+ * members page, never something a forwarded link can do.
+ */
+export async function consumeGroupInvite(
+  kv: Deno.Kv,
+  token: string,
+  userId: string,
+): Promise<Group> {
+  const hash = await sha256Hex(token);
+  const entry = await getRecord<GroupInvite>(kv, keys.groupInvite(hash));
+  const invite = entry.value;
+  if (!invite) throw new InviteError("That invite link is not valid.");
+
+  const group = await getGroup(kv, invite.groupId);
+  if (!group) throw new InviteError("That club no longer exists.");
+
+  // Someone already in the club has nothing to redeem — including the person
+  // who just redeemed this very link and opened it a second time.
+  const existing = await getMembership(kv, group.id, userId);
+  if (existing) return group;
+
+  if (invite.redeemedAt) {
+    throw new InviteError("That invite link has already been used.");
+  }
+
+  const redeemed: GroupInvite = {
+    ...invite,
+    redeemedAt: nowIso(),
+    redeemedBy: userId,
+  };
+
+  // Preserve whatever life the record had left rather than resetting its TTL.
+  const remainingMs = new Date(invite.expiresAt).getTime() - Date.now();
+  const claimed = await kv.atomic()
+    .check(entry)
+    .set(keys.groupInvite(hash), redeemed, {
+      expireIn: Math.max(remainingMs, 60 * 1000),
+    })
+    .commit();
+
+  // Lost the race, so another request already redeemed this invite.
+  if (!claimed.ok) {
+    throw new InviteError("That invite link has already been used.");
+  }
+
+  await ensureMembership(kv, group.id, userId, "player");
+  return group;
 }

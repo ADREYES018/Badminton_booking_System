@@ -58,6 +58,8 @@ export const keys = {
     ["member", groupId, userId] as const,
   membersByUser: (userId: string, groupId: string) =>
     ["members_by_user", userId, groupId] as const,
+  /** Key is a hash of the token; the raw token is never stored. */
+  groupInvite: (tokenHash: string) => ["group_invite", tokenHash] as const,
 
   // ---- Games --------------------------------------------------------------
   game: (gameId: string) => ["game", gameId] as const,

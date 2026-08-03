@@ -86,6 +86,24 @@ export interface Membership {
   joinedAt: string;
 }
 
+/**
+ * A single-use link that admits one player to a group.
+ *
+ * Stored under a hash of the token, never the token itself, so a database dump
+ * yields no working invite — the same rule magic-link tokens follow.
+ */
+export interface GroupInvite {
+  v: 1;
+  groupId: string;
+  createdBy: string;
+  createdAt: string;
+  expiresAt: string;
+  /** Set once redeemed. The record outlives its use so a second tap on the
+   * link can say "already used" rather than "no such invite". */
+  redeemedAt?: string;
+  redeemedBy?: string;
+}
+
 export type CourtMode = "fixed" | "flexible";
 export type CourtStatus = "not_reserved" | "reserved" | "paid";
 export type GameVisibility = "public" | "unlisted" | "password";
