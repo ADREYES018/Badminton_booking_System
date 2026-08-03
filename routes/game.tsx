@@ -38,7 +38,7 @@ import { hasBill, PaymentPanel } from "../components/PaymentPanel.tsx";
 import { ResultsPanel } from "../components/ResultsPanel.tsx";
 import { AttendanceChip, AttendanceToggle } from "../components/Attendance.tsx";
 import { CheckinCode } from "../components/CheckinCode.tsx";
-import { mintCheckinToken } from "../lib/domain/checkin.ts";
+import { checkinVersionOf, mintCheckinToken } from "../lib/domain/checkin.ts";
 import {
   CSRF_FIELD,
   csrfCookie,
@@ -544,12 +544,11 @@ export function gameRoute(app: App<State>) {
       throw new HttpError(404, "That game could not be found");
     }
 
-    // A code is only worth showing to someone who has a seat and a game about
-    // to start. Minted per request because it expires within ten minutes.
+    // The player's permanent code, shown to anyone holding a seat. It is the
+    // same code everywhere, so there is nothing to withhold until the cutoff.
     const checkinToken = signup?.status === "confirmed" &&
-        isPastCutoff(game.startUtc, game.cutoffHours) &&
         game.status !== "cancelled"
-      ? await mintCheckinToken(game.id, user.id)
+      ? await mintCheckinToken(user.id, checkinVersionOf(user))
       : undefined;
 
     const response = await ctx.render(

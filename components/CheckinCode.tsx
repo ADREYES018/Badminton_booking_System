@@ -2,13 +2,13 @@
  * A player's check-in code.
  *
  * Rendered server-side as inline SVG, so it costs no client JavaScript and
- * appears with the page rather than after it. The code is minted per request
- * and expires within ten minutes, which is why it is not cached anywhere.
+ * appears with the page rather than after it. One code per player, the same
+ * at every game — worth saving to a photo roll, which is the point.
  *
  * The token is printed underneath as text. A camera that will not focus, a
  * cracked screen, or a phone at 1% are all more common at a badminton court
- * than any of them are in a design review, and an organizer who can type six
- * characters is not blocked by any of them.
+ * than any of them are in a design review, and an organizer who can type a
+ * few characters is not blocked by any of them.
  */
 
 import { Card } from "./ui.tsx";
@@ -30,7 +30,7 @@ export function CheckinCode(props: CheckinCodeProps) {
           Your check-in code
         </h2>
         <p class="text-label-sm text-on-surface-variant text-center">
-          Show this at the door. It refreshes every few minutes.
+          Show this at the door. It is the same code at every game.
         </p>
       </div>
 

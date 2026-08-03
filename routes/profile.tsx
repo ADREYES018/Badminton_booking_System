@@ -36,6 +36,7 @@ import {
   savePhoto,
 } from "../lib/data/photos.ts";
 import { encryptSecret, ibanLast4, maskIban } from "../lib/crypto.ts";
+import { checkinVersionOf } from "../lib/domain/checkin.ts";
 import {
   isValidIban,
   normalizeIban,
@@ -50,6 +51,8 @@ interface ProfileViewProps {
   csrf: string;
   error?: string;
   saved?: boolean;
+  /** Something happened that is not "profile saved" — say what instead. */
+  notice?: string;
   setup?: boolean;
 }
 
@@ -91,6 +94,7 @@ function ProfileView(props: ProfileViewProps) {
 
         {props.error && <Alert tone="error">{props.error}</Alert>}
         {props.saved && <Alert tone="success">Profile saved.</Alert>}
+        {props.notice && <Alert tone="success">{props.notice}</Alert>}
 
         <Card>
           <form
@@ -247,6 +251,25 @@ function ProfileView(props: ProfileViewProps) {
         </Card>
 
         {!setup && (
+          <Card class="flex flex-col gap-3">
+            <h2 class="text-body-lg font-bold text-on-surface">
+              Check-in code
+            </h2>
+            <p class="text-body-md text-on-surface-variant">
+              Your QR code never expires, so anyone you have sent a screenshot
+              to still has a working copy. Replacing it kills the old one.
+            </p>
+            <form method="post" action="/profile">
+              <input type="hidden" name={CSRF_FIELD} value={props.csrf} />
+              <input type="hidden" name="replaceCheckinCode" value="1" />
+              <Button type="submit" variant="secondary">
+                Replace my check-in code
+              </Button>
+            </form>
+          </Card>
+        )}
+
+        {!setup && (
           <form method="post" action="/auth/logout">
             <input type="hidden" name={CSRF_FIELD} value={props.csrf} />
             <Button type="submit" variant="ghost" fullWidth>Sign out</Button>
@@ -309,6 +332,23 @@ export function profileRoutes(app: App<State>) {
         csrf,
         setup,
         error: "That form expired. Please try again.",
+      });
+    }
+
+    // Handled before the profile fields are read, because this form carries
+    // none of them and every check below would reject it.
+    if (form.get("replaceCheckinCode")) {
+      // The id comes from the session, never from the form: a player may only
+      // retire their own code.
+      const replaced = await updateUser(kv, user.id, {
+        checkinVersion: checkinVersionOf(user) + 1,
+      });
+
+      return await renderProfile(ctx, {
+        user: replaced,
+        csrf,
+        setup,
+        notice: "Your check-in code has been replaced.",
       });
     }
 

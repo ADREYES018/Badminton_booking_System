@@ -6,7 +6,8 @@
  * the toggles handle whoever's phone is flat, so the organizer never has to
  * leave this page to fix a miss.
  *
- * For a player: their code for each game that is ready to check into.
+ * For a player: their one permanent code, and the games it is currently good
+ * for.
  *
  * The bottom nav has linked here since Phase 1 and it has been a 404 since.
  */
@@ -40,7 +41,7 @@ import { listGamesByGroup } from "../lib/data/games.ts";
 import { getSignup, listRoster } from "../lib/data/signups.ts";
 import { getUser } from "../lib/data/users.ts";
 import { redirectToGroup } from "../lib/routing/group_redirect.ts";
-import { mintCheckinToken } from "../lib/domain/checkin.ts";
+import { checkinVersionOf, mintCheckinToken } from "../lib/domain/checkin.ts";
 import { formatGameTime, isPastCutoff } from "../lib/domain/time.ts";
 import type { VNode } from "preact";
 import type { Game, Signup, User } from "../lib/types.ts";
@@ -138,7 +139,8 @@ function OrganizerView(props: OrganizerProps) {
 
 interface PlayerProps {
   user: User;
-  codes: Array<{ game: Game; token: string }>;
+  token: string;
+  games: Game[];
 }
 
 function PlayerView(props: PlayerProps) {
@@ -146,29 +148,35 @@ function PlayerView(props: PlayerProps) {
     <div class="flex flex-col gap-6 max-w-3xl mx-auto">
       <h1 class="text-headline-lg font-headline text-on-surface">Check in</h1>
 
-      {props.codes.length === 0
+      <CheckinCode token={props.token} />
+
+      {props.games.length === 0
         ? (
           <EmptyState title="Nothing to check into yet">
-            Your code appears here once a game's roster closes at the cutoff.
+            Your code still works. Games appear here once their rosters close.
           </EmptyState>
         )
         : (
-          props.codes.map(({ game, token }) => (
-            <div key={game.id} class="flex flex-col gap-2">
-              <div class="flex flex-col gap-0.5">
-                <a
-                  href={`/games/${game.slug}`}
-                  class="text-body-lg font-bold text-on-surface hover:text-primary transition-colors"
-                >
-                  {game.title}
-                </a>
-                <p class="text-label-sm text-on-surface-variant">
-                  {formatGameTime(game.startUtc, game.endUtc)}
-                </p>
-              </div>
-              <CheckinCode token={token} compact />
-            </div>
-          ))
+          <Card class="flex flex-col gap-3">
+            <h2 class="text-body-lg font-bold text-on-surface">
+              Ready to check into
+            </h2>
+            <ul class="flex flex-col divide-y divide-outline-variant">
+              {props.games.map((game) => (
+                <li key={game.id} class="flex flex-col gap-0.5 py-3">
+                  <a
+                    href={`/games/${game.slug}`}
+                    class="text-body-md font-bold text-on-surface hover:text-primary transition-colors"
+                  >
+                    {game.title}
+                  </a>
+                  <p class="text-label-sm text-on-surface-variant">
+                    {formatGameTime(game.startUtc, game.endUtc)}
+                  </p>
+                </li>
+              ))}
+            </ul>
+          </Card>
         )}
     </div>
   );
@@ -254,16 +262,20 @@ export function checkinRoute(app: App<State>) {
       .filter(isOpenForCheckin)
       .sort((a, b) => b.startUtc.localeCompare(a.startUtc));
 
-    const codes: Array<{ game: Game; token: string }> = [];
+    // Only the games this player is actually on, so the list matches what the
+    // scanner will accept.
+    const mine: Game[] = [];
     for (const game of games) {
       const signup = await getSignup(kv, game.id, user.id);
-      if (signup?.status !== "confirmed") continue;
-      codes.push({ game, token: await mintCheckinToken(game.id, user.id) });
+      if (signup?.status === "confirmed") mine.push(game);
     }
+
+    // One code, whatever is on the list. It does not depend on the games.
+    const token = await mintCheckinToken(user.id, checkinVersionOf(user));
 
     return await render(
       <Page user={user} nav="checkin" groupSlug={group.slug}>
-        <PlayerView user={user} codes={codes} />
+        <PlayerView user={user} token={token} games={mine} />
       </Page>,
     );
   });

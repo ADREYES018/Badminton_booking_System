@@ -175,7 +175,7 @@ console.log(
         // Owns the other club, and administers nothing here.
         rivalOwner: await cookie(rivalOwner),
       },
-      checkinToken: await mintCheckinToken(frozen.game.id, roster[0]!.id),
+      checkinToken: await mintCheckinToken(roster[0]!.id),
     },
     null,
     2,
