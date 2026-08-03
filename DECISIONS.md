@@ -458,3 +458,30 @@ another club's roster and money by naming their own club in the URL.
 Every organizer route now checks that the game belongs to the club being
 administered, and answers 404 rather than 403: a game in someone else's club is
 not theirs to know about.
+
+## After the first deployment
+
+### A magic link is confirmed, not consumed, on arrival
+
+`GET /auth/verify` shows a Sign in button; the `POST` behind it spends the
+token.
+
+Consuming on `GET` worked for every local test and failed on the first real
+email. Mail providers fetch the links in a message before their recipient ever
+opens it — to scan for malware, to build a preview — and a single-use token
+spent by that fetch is gone by the time its owner clicks. The failure is
+particularly bad because it is indistinguishable from the honest case: the user
+is told the link has expired, on a link that is seconds old, and asking for
+another one produces the same result forever.
+
+Development never showed it. With no `RESEND_API_KEY` the link is printed to the
+console, and a console has no scanner.
+
+The alternative — letting a token be redeemed two or three times inside its
+window — absorbs the scanner without the extra click, and gives away the
+property that makes single use worth having: a link that leaks or is forwarded
+inside those fifteen minutes would admit whoever else opens it.
+
+Requests arriving from an inbox carry no CSRF cookie, so the confirmation page
+sets one. A refused CSRF check leaves the token unspent, or a forged submission
+would be a way to burn someone else's link.

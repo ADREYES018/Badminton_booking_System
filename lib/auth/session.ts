@@ -57,6 +57,22 @@ export async function issueMagicToken(
 }
 
 /**
+ * Reads a magic token without spending it.
+ *
+ * The landing page needs to know whether a link is still good before it offers
+ * to sign anyone in, and a mail scanner following the link must not burn it on
+ * the way past. Redemption is a separate, deliberate act.
+ */
+export async function peekMagicToken(
+  kv: Deno.Kv,
+  token: string,
+): Promise<MagicToken | null> {
+  const hash = await sha256Hex(token);
+  const entry = await getRecord<MagicToken>(kv, keys.magicToken(hash));
+  return entry.value;
+}
+
+/**
  * Redeems a magic token. Single use: the delete is checked against the read, so
  * two clicks on the same link cannot both succeed.
  */
