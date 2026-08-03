@@ -17,13 +17,14 @@ import type { State } from "../main.ts";
 import {
   clientIp,
   CSRF_FIELD,
+  type GroupAccess,
   HttpError,
+  loadGroupAccess,
   requireUser,
   verifyCsrf,
 } from "../lib/auth/middleware.ts";
 import { getGameBySlug } from "../lib/data/games.ts";
 import { SignupError } from "../lib/data/signups.ts";
-import { ensureDefaultGroup, ensureMembership } from "../lib/data/groups.ts";
 import { audit, type AuditAction } from "../lib/data/audit.ts";
 import type { Game, User } from "../lib/types.ts";
 
@@ -52,6 +53,8 @@ export interface ActionContext {
   kv: Deno.Kv;
   form: FormData;
   game: Game;
+  /** The caller's standing in the club that owns this game. */
+  access: GroupAccess;
 }
 
 /** Redirect carrying a message, so a refresh never resubmits the action. */
@@ -67,8 +70,13 @@ export function backToGame(
 }
 
 /**
- * Shared prologue: authenticate, verify CSRF, load the game, and make sure
- * the player is a member of the club.
+ * Shared prologue: authenticate, verify CSRF, load the game, and load the
+ * caller's rights over the club that owns it.
+ *
+ * Membership is loaded but not required here. Acting on a game needs it, and
+ * every caller that changes something asserts it — but which failure is right
+ * depends on the action, so the decision belongs to the action rather than to
+ * this prologue.
  */
 export async function begin(ctx: ActionCtx): Promise<ActionContext> {
   const user = requireUser(ctx.state.auth);
@@ -82,18 +90,9 @@ export async function begin(ctx: ActionCtx): Promise<ActionContext> {
   const game = await getGameBySlug(kv, ctx.params.slug!);
   if (!game) throw new HttpError(404, "That game could not be found");
 
-  const group = await ensureDefaultGroup(kv, user.id);
-  // The seeded role matters: `ensureMembership` only writes on the first
-  // touch, so seating an organizer as a player here would deny them their own
-  // group's controls forever after. This mirrors `organizerContext`.
-  await ensureMembership(
-    kv,
-    group.id,
-    user.id,
-    user.role === "player" ? "player" : "organizer",
-  );
+  const access = await loadGroupAccess(ctx.state.auth, game.groupId);
 
-  return { user, kv, form, game };
+  return { user, kv, form, game, access };
 }
 
 /**

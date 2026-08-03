@@ -23,7 +23,7 @@ const { app } = await import("../main.ts");
 const { getKv } = await import("../lib/kv/kv.ts");
 const { createSession, sessionCookie } = await import("../lib/auth/session.ts");
 const { CSRF_COOKIE, CSRF_FIELD } = await import("../lib/auth/middleware.ts");
-const { seedGame } = await import("../lib/testing/fixtures.ts");
+const { futureStart, seedGame } = await import("../lib/testing/fixtures.ts");
 const {
   createGroupForOwner,
   DEFAULT_GROUP_SLUG,
@@ -31,7 +31,10 @@ const {
   getMembership,
   issueGroupInvite,
   listGroupsForUser,
+  setMemberBlocked,
 } = await import("../lib/data/groups.ts");
+const { createGame } = await import("../lib/data/games.ts");
+const { getSignup } = await import("../lib/data/signups.ts");
 const { createUser, updateUser } = await import("../lib/data/users.ts");
 type User = import("../lib/types.ts").User;
 
@@ -322,6 +325,68 @@ Deno.test("the bare stats and check-in paths follow a lone club through", async 
     assertEquals(response.status, 302);
     assertEquals(locationOf(response), `/g/${group.slug}/${page}`);
   }
+});
+
+Deno.test("a non-member may read a public game but not take a seat in it", async () => {
+  const { game } = await seedGame(kv);
+  const stranger = await seedComplete("gatecrasher");
+  const auth = await signIn(stranger);
+
+  const page = await get(`/games/${game.slug}`, auth);
+  const body = await page.text();
+  assertEquals(page.status, 200);
+  assertStringIncludes(body, "Only members of this club can sign up");
+
+  const attempt = await post(`/games/${game.slug}/join`, auth);
+  await attempt.body?.cancel();
+  assertEquals(attempt.status, 403);
+  assertEquals(await getSignup(kv, game.id, stranger.id), null);
+});
+
+Deno.test("an unlisted game is invisible to a non-member", async () => {
+  const { groupId, organizer } = await seedGame(kv);
+  const hidden = await createGame(kv, {
+    groupId,
+    title: "Quiet Session",
+    venue: { name: "Test Courts", address: "Dubai" },
+    startUtc: futureStart(120),
+    endUtc: futureStart(122),
+    courts: 1,
+    playersPerCourt: 4,
+    totalCostFils: 12000,
+    guestPricing: { mode: "free", feeFils: 0 },
+    cutoffHours: 48,
+    createdBy: organizer.id,
+    visibility: "unlisted",
+  });
+
+  const stranger = await seedComplete("prying");
+  const refused = await get(`/games/${hidden.slug}`, await signIn(stranger));
+  await refused.body?.cancel();
+  assertEquals(refused.status, 404);
+
+  // A member of the club follows the link as intended.
+  const member = await seedComplete("insider");
+  await ensureMembership(kv, groupId, member.id);
+  const allowed = await get(`/games/${hidden.slug}`, await signIn(member));
+  await allowed.body?.cancel();
+  assertEquals(allowed.status, 200);
+});
+
+Deno.test("a blocked member cannot join a game", async () => {
+  const { game, groupId } = await seedGame(kv);
+  const player = await seedComplete("blocked");
+  await ensureMembership(kv, groupId, player.id);
+  await setMemberBlocked(kv, groupId, player.id, true, {
+    actorId: player.id,
+    reason: "Repeated no-shows",
+  });
+
+  const response = await post(`/games/${game.slug}/join`, await signIn(player));
+  await response.body?.cancel();
+
+  assertEquals(response.status, 403);
+  assertEquals(await getSignup(kv, game.id, player.id), null);
 });
 
 Deno.test("a club page keeps its navigation inside that club", async () => {

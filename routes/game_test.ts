@@ -27,7 +27,9 @@ const { createSession, sessionCookie } = await import(
   "../lib/auth/session.ts"
 );
 const { CSRF_COOKIE, CSRF_FIELD } = await import("../lib/auth/middleware.ts");
-const { seedGame, seedPlayer } = await import("../lib/testing/fixtures.ts");
+const { seedGame, seedMember, seedPlayer } = await import(
+  "../lib/testing/fixtures.ts"
+);
 const { getSignup } = await import("../lib/data/signups.ts");
 const { getGame } = await import("../lib/data/games.ts");
 type User = import("../lib/types.ts").User;
@@ -75,8 +77,12 @@ function messageFrom(response: Response): {
 }
 
 Deno.test("joining through the route seats the player and redirects", async () => {
-  const { game } = await seedGame(kv, { courts: 1, playersPerCourt: 4 });
+  const { game, groupId } = await seedGame(kv, {
+    courts: 1,
+    playersPerCourt: 4,
+  });
   const player = await seedPlayer(kv);
+  await seedMember(kv, groupId, player);
   const auth = await signIn(player);
 
   const response = await post(`/games/${game.slug}/join`, auth);
@@ -97,8 +103,9 @@ Deno.test("joining through the route seats the player and redirects", async () =
 });
 
 Deno.test("a join with a bad CSRF token is refused and seats nobody", async () => {
-  const { game } = await seedGame(kv);
+  const { game, groupId } = await seedGame(kv);
   const player = await seedPlayer(kv);
+  await seedMember(kv, groupId, player);
   const auth = await signIn(player);
 
   const response = await post(`/games/${game.slug}/join`, auth, {}, {
@@ -117,8 +124,9 @@ Deno.test("a join with a bad CSRF token is refused and seats nobody", async () =
 });
 
 Deno.test("a second join comes back as a readable refusal, not a crash", async () => {
-  const { game } = await seedGame(kv);
+  const { game, groupId } = await seedGame(kv);
   const player = await seedPlayer(kv);
+  await seedMember(kv, groupId, player);
   const auth = await signIn(player);
 
   await (await post(`/games/${game.slug}/join`, auth)).body?.cancel();
@@ -134,8 +142,9 @@ Deno.test("a second join comes back as a readable refusal, not a crash", async (
 });
 
 Deno.test("leaving through the route frees the seat", async () => {
-  const { game } = await seedGame(kv);
+  const { game, groupId } = await seedGame(kv);
   const player = await seedPlayer(kv);
+  await seedMember(kv, groupId, player);
   const auth = await signIn(player);
 
   await (await post(`/games/${game.slug}/join`, auth)).body?.cancel();
@@ -151,8 +160,9 @@ Deno.test("leaving through the route frees the seat", async () => {
 });
 
 Deno.test("adding a guest takes a seat and names the guest back", async () => {
-  const { game } = await seedGame(kv, { maxGuestsPerPlayer: 1 });
+  const { game, groupId } = await seedGame(kv, { maxGuestsPerPlayer: 1 });
   const player = await seedPlayer(kv);
+  await seedMember(kv, groupId, player);
   const auth = await signIn(player);
 
   await (await post(`/games/${game.slug}/join`, auth)).body?.cancel();
@@ -169,8 +179,9 @@ Deno.test("adding a guest takes a seat and names the guest back", async () => {
 });
 
 Deno.test("a guest with no usable name is rejected before any write", async () => {
-  const { game } = await seedGame(kv, { maxGuestsPerPlayer: 1 });
+  const { game, groupId } = await seedGame(kv, { maxGuestsPerPlayer: 1 });
   const player = await seedPlayer(kv);
+  await seedMember(kv, groupId, player);
   const auth = await signIn(player);
 
   await (await post(`/games/${game.slug}/join`, auth)).body?.cancel();
@@ -186,8 +197,9 @@ Deno.test("a guest with no usable name is rejected before any write", async () =
 });
 
 Deno.test("removing a guest returns the seat", async () => {
-  const { game } = await seedGame(kv, { maxGuestsPerPlayer: 1 });
+  const { game, groupId } = await seedGame(kv, { maxGuestsPerPlayer: 1 });
   const player = await seedPlayer(kv);
+  await seedMember(kv, groupId, player);
   const auth = await signIn(player);
 
   await (await post(`/games/${game.slug}/join`, auth)).body?.cancel();
@@ -207,8 +219,9 @@ Deno.test("removing a guest returns the seat", async () => {
 });
 
 Deno.test("confirming with no offer outstanding is a refusal, not a crash", async () => {
-  const { game } = await seedGame(kv);
+  const { game, groupId } = await seedGame(kv);
   const player = await seedPlayer(kv);
+  await seedMember(kv, groupId, player);
   const auth = await signIn(player);
 
   const response = await post(`/games/${game.slug}/confirm`, auth);

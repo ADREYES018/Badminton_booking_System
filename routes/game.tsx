@@ -25,6 +25,7 @@ import {
   Card,
   Chip,
   Field,
+  LinkButton,
   ProgressBar,
 } from "../components/ui.tsx";
 import {
@@ -44,6 +45,7 @@ import {
   HttpError,
   isSecureRequest,
   loadGroupAccess,
+  requireMember,
   requireUser,
 } from "../lib/auth/middleware.ts";
 import { act, backToGame } from "./game_action.ts";
@@ -100,6 +102,8 @@ interface DetailProps {
   isOrganizer: boolean;
   /** The club this game belongs to, for links back into its own screens. */
   groupSlug: string;
+  /** Non-members can read a public game but not take a seat in it. */
+  isMember: boolean;
   matches: Match[];
   /** Minted per request for a confirmed player once the cutoff has passed. */
   checkinToken?: string;
@@ -196,6 +200,26 @@ function ActionPanel(props: DetailProps) {
       <Alert tone="error">
         This game was cancelled.
         {game.cancelledReason ? ` ${game.cancelledReason}` : ""}
+      </Alert>
+    );
+  }
+
+  // Someone who followed a shared link here can read the whole page, so the
+  // panel tells them what stands between them and a seat rather than showing
+  // an RSVP button that would only refuse them.
+  if (!props.isMember) {
+    return (
+      <Alert tone="info">
+        <div class="flex flex-col gap-3">
+          <p>Only members of this club can sign up for its games.</p>
+          <LinkButton
+            href={`/g/${props.groupSlug}/games`}
+            variant="primary"
+            class="w-fit"
+          >
+            About this club
+          </LinkButton>
+        </div>
       </Alert>
     );
   }
@@ -512,6 +536,14 @@ export function gameRoute(app: App<State>) {
       listMatchesForGame(kv, game.id),
     ]);
 
+    // A public game is visible to anyone signed in — that is how a link shared
+    // into a chat brings someone in. A game the organizer chose to keep off
+    // the listing is a different promise, and is not honoured by handing it to
+    // anyone who guesses the slug.
+    if (game.visibility !== "public" && !access.membership) {
+      throw new HttpError(404, "That game could not be found");
+    }
+
     // A code is only worth showing to someone who has a seat and a game about
     // to start. Minted per request because it expires within ten minutes.
     const checkinToken = signup?.status === "confirmed" &&
@@ -529,6 +561,7 @@ export function gameRoute(app: App<State>) {
         payout={access.group.payout}
         isOrganizer={access.isOrganizer}
         groupSlug={access.group.slug}
+        isMember={access.membership !== null}
         matches={matches}
         checkinToken={checkinToken}
         error={url.searchParams.get("error") ?? undefined}
@@ -546,7 +579,11 @@ export function gameRoute(app: App<State>) {
   app.post(
     "/games/:slug/join",
     (ctx) =>
-      act(ctx, async ({ user, kv, game }) => {
+      act(ctx, async ({ user, kv, game, access }) => {
+        // Joining a game is where club membership starts to matter: the game
+        // page is open to anyone signed in, but a seat on the roster is not.
+        requireMember(access);
+
         const result = await joinGame(kv, game.id, user);
         await flush(kv, result.effects);
 
@@ -591,7 +628,10 @@ export function gameRoute(app: App<State>) {
   app.post(
     "/games/:slug/guests",
     (ctx) =>
-      act(ctx, async ({ user, kv, form, game }) => {
+      act(ctx, async ({ user, kv, form, game, access }) => {
+        // A guest comes in on a member's name, so there has to be one.
+        requireMember(access);
+
         const name = cleanText(form.get("guestName")?.toString() ?? "", 60);
         if (name.length < 2) {
           return backToGame(game.slug, {
