@@ -13,8 +13,8 @@ cp .env.example .env         # then paste the keys in
 deno task dev                # http://localhost:5173
 ```
 
-With no `RESEND_API_KEY` set, emails are printed to the console — the magic-link
-sign-in URL appears there, so no mail account is needed in development.
+With no `RESEND_API_KEY` set, emails are printed to the console — the six-digit
+sign-in code appears there, so no mail account is needed in development.
 
 Set `SUPER_ADMIN_EMAIL` to your own address before first sign-in; that account
 is promoted to platform owner.
@@ -40,7 +40,7 @@ lib/
   kv/           Key schema, migrate-on-read, atomic retry helper
   domain/       Money, time and validation — the tested core
   data/         Record access per entity
-  auth/         Sessions, magic links, CSRF, role guards
+  auth/         Sessions, sign-in codes, CSRF, role guards
 static/         Styles, self-hosted fonts, PWA icons
 tools/          One-off scripts (key generation, icon rendering)
 ```
@@ -112,9 +112,9 @@ deno deploy database provision smash-club-kv --kind denokv --org <org>
 deno deploy database assign smash-club-kv --app smash-club
 ```
 
-**4. Set the environment.** `APP_URL` must be the real origin: every magic link
-and QR payload is built from it, and a deployment without it now refuses to
-start rather than handing out links pointing at localhost.
+**4. Set the environment.** `APP_URL` must be the real origin: check-in QR
+payloads and invite links are built from it, and a deployment without it refuses
+to start rather than handing out links pointing at localhost.
 
 | Variable            | Value                                              |
 | ------------------- | -------------------------------------------------- |
@@ -126,7 +126,7 @@ start rather than handing out links pointing at localhost.
 | `EMAIL_FROM`        | see below                                          |
 | `KV_PATH`           | **unset** — Deploy provides its own                |
 
-**5. Email.** Without `RESEND_API_KEY` the app logs magic links to the server
+**5. Email.** Without `RESEND_API_KEY` the app logs sign-in codes to the server
 console instead of sending them, which on a deployment means nobody can sign in.
 Resend's `onboarding@resend.dev` needs no domain and no DNS, but only delivers
 to the address that owns the Resend account:
@@ -146,8 +146,8 @@ create a club from `/groups`.
 
 All six phases are complete:
 
-- **Phase 1** — magic-link auth, sessions, role guards, profiles with encrypted
-  refund IBANs, the KV layer, and the PWA shell.
+- **Phase 1** — passwordless auth, sessions, role guards, profiles with
+  encrypted refund IBANs, the KV layer, and the PWA shell.
 - **Phase 2** — games, RSVP, guests and the waitlist.
 - **Phase 3** — the cutoff freeze, payments, reminders, refunds, match results
   and attendance.

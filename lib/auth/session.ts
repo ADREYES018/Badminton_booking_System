@@ -1,18 +1,25 @@
 /**
- * Magic-link tokens, sessions, and rate limiting.
+ * Sign-in codes, sessions, and rate limiting.
  *
  * There are no passwords anywhere in this app. A login is: prove you can read
  * an inbox, receive a session cookie.
  *
- * Tokens are stored hashed with a KV `expireIn`, so they self-delete and a
- * database dump never yields a working login link.
+ * The proof is a six-digit code rather than a link. A link in an email is
+ * fetched by the mail provider before its recipient ever sees it — to scan it,
+ * to preview it — and a single-use link is spent by that fetch. A code cannot
+ * be followed, so nothing can spend it on the reader's behalf.
+ *
+ * Codes are stored hashed with a KV `expireIn`, so they self-delete and a
+ * database dump never yields anything that can be typed in. Being short, they
+ * are also guessable in a way a 32-byte token was not, so wrong answers are
+ * counted and the code is destroyed once the allowance runs out.
  */
 
 import { ulid } from "@std/ulid";
 import { keys } from "../kv/keys.ts";
 import { getRecord } from "../kv/kv.ts";
 import type { MagicToken, Session, User } from "../types.ts";
-import { randomToken, sha256Hex } from "../crypto.ts";
+import { sha256Hex, timingSafeEqual } from "../crypto.ts";
 import { normalizeEmail } from "../domain/validate.ts";
 import { nowIso } from "../domain/time.ts";
 
@@ -26,71 +33,132 @@ const SESSION_REFRESH_AFTER_MS = 7 * DAY_MS;
 
 export const SESSION_COOKIE = "sc_session";
 
+/** Wrong guesses a code survives before it is destroyed. */
+export const MAX_CODE_ATTEMPTS = 5;
+
+export const CODE_LENGTH = 6;
+
 export interface IssuedToken {
-  /** The raw token, emailed to the user. Never stored. */
-  token: string;
+  /** The code, emailed to the user. Never stored in the clear. */
+  code: string;
   expiresAt: string;
 }
 
+/**
+ * Six digits from the system's cryptographic source.
+ *
+ * Rejection sampling rather than a modulo of one random value: the low bits of
+ * a bounded range are not uniform under modulo, and a login code with
+ * predictable digits is worth less than its length suggests.
+ */
+function randomCode(): string {
+  const max = 10 ** CODE_LENGTH;
+  const limit = Math.floor(0xffffffff / max) * max;
+  const buffer = new Uint32Array(1);
+  let value: number;
+  do {
+    crypto.getRandomValues(buffer);
+    value = buffer[0]!;
+  } while (value >= limit);
+  return (value % max).toString().padStart(CODE_LENGTH, "0");
+}
+
+/**
+ * Issues a sign-in code for an address, replacing any code already pending for
+ * it — asking again should invalidate the previous email rather than leave two
+ * codes live.
+ */
 export async function issueMagicToken(
   kv: Deno.Kv,
   email: string,
   options: { ip?: string; redirectTo?: string } = {},
 ): Promise<IssuedToken> {
-  const token = randomToken(32);
-  const hash = await sha256Hex(token);
+  const code = randomCode();
+  const emailLower = normalizeEmail(email);
   const record: MagicToken = {
     v: 1,
     email: email.trim(),
-    emailLower: normalizeEmail(email),
+    emailLower,
+    codeHash: await sha256Hex(code),
     ip: options.ip,
     createdAt: nowIso(),
     redirectTo: options.redirectTo,
+    attempts: 0,
   };
 
-  await kv.set(keys.magicToken(hash), record, { expireIn: MAGIC_TOKEN_TTL_MS });
+  await kv.set(keys.magicToken(emailLower), record, {
+    expireIn: MAGIC_TOKEN_TTL_MS,
+  });
 
   return {
-    token,
+    code,
     expiresAt: new Date(Date.now() + MAGIC_TOKEN_TTL_MS).toISOString(),
   };
 }
 
+/** Whether a code was accepted, and if not, why. */
+export type CodeResult =
+  | { ok: true; claim: MagicToken }
+  | { ok: false; reason: "unknown" | "wrong" | "exhausted" };
+
 /**
- * Reads a magic token without spending it.
+ * Checks a code against the one pending for an address.
  *
- * The landing page needs to know whether a link is still good before it offers
- * to sign anyone in, and a mail scanner following the link must not burn it on
- * the way past. Redemption is a separate, deliberate act.
+ * Right answer: the record is deleted in the same commit that reads it, so two
+ * submissions of the same code cannot both open a session.
+ *
+ * Wrong answer: the attempt is counted, and the code is destroyed once the
+ * allowance runs out. Six digits is a million combinations — survivable to
+ * guess only if guessing is unlimited, which is exactly what the counter
+ * removes. A miscount from a lost race would let the attacker have the attempt
+ * for free, so the increment is checked against the read like everything else.
  */
-export async function peekMagicToken(
+export async function verifyLoginCode(
   kv: Deno.Kv,
-  token: string,
-): Promise<MagicToken | null> {
-  const hash = await sha256Hex(token);
-  const entry = await getRecord<MagicToken>(kv, keys.magicToken(hash));
-  return entry.value;
-}
+  email: string,
+  code: string,
+): Promise<CodeResult> {
+  const emailLower = normalizeEmail(email);
+  const key = keys.magicToken(emailLower);
+  const entry = await getRecord<MagicToken>(kv, key);
+  const pending = entry.value;
+  if (!pending) return { ok: false, reason: "unknown" };
 
-/**
- * Redeems a magic token. Single use: the delete is checked against the read, so
- * two clicks on the same link cannot both succeed.
- */
-export async function consumeMagicToken(
-  kv: Deno.Kv,
-  token: string,
-): Promise<MagicToken | null> {
-  const hash = await sha256Hex(token);
-  const entry = await getRecord<MagicToken>(kv, keys.magicToken(hash));
-  if (!entry.value) return null;
+  const submitted = await sha256Hex(code.trim());
+  if (timingSafeEqual(submitted, pending.codeHash)) {
+    const claimed = await kv.atomic().check(entry).delete(key).commit();
+    // Lost the race, so another request already signed in with this code.
+    if (!claimed.ok) return { ok: false, reason: "unknown" };
+    return { ok: true, claim: pending };
+  }
 
-  const deleted = await kv.atomic()
+  const attempts = pending.attempts + 1;
+  if (attempts >= MAX_CODE_ATTEMPTS) {
+    await kv.atomic().check(entry).delete(key).commit();
+    return { ok: false, reason: "exhausted" };
+  }
+
+  // Preserve whatever life the code had left rather than resetting its window.
+  const elapsed = Date.now() - new Date(pending.createdAt).getTime();
+  await kv.atomic()
     .check(entry)
-    .delete(keys.magicToken(hash))
+    .set(key, { ...pending, attempts }, {
+      expireIn: Math.max(MAGIC_TOKEN_TTL_MS - elapsed, 1000),
+    })
     .commit();
 
-  // Lost the race, so another request already redeemed this token.
-  if (!deleted.ok) return null;
+  return { ok: false, reason: "wrong" };
+}
+
+/** The code pending for an address, for tests and for the resend guard. */
+export async function peekMagicToken(
+  kv: Deno.Kv,
+  email: string,
+): Promise<MagicToken | null> {
+  const entry = await getRecord<MagicToken>(
+    kv,
+    keys.magicToken(normalizeEmail(email)),
+  );
   return entry.value;
 }
 

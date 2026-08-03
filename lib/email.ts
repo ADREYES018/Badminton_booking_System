@@ -150,34 +150,34 @@ function button(href: string, label: string): string {
   }</a>`;
 }
 
-export function magicLinkEmail(
-  to: string,
-  token: string,
-  redirectTo?: string,
-): EmailMessage {
-  const url = new URL("/auth/verify", appUrl());
-  url.searchParams.set("token", token);
-  if (redirectTo) url.searchParams.set("next", redirectTo);
-  const link = url.toString();
+/**
+ * The sign-in code, spaced for reading.
+ *
+ * A code carries no link, so there is nothing for a mail provider to fetch on
+ * the recipient's behalf and nothing it can spend before they arrive. The
+ * subject line carries the code too, since that is often all someone sees on a
+ * lock screen.
+ */
+export function magicLinkEmail(to: string, code: string): EmailMessage {
+  const spaced = `${code.slice(0, 3)} ${code.slice(3)}`;
 
   return {
     to,
-    subject: "Your Smash Club sign-in link",
+    subject: `${spaced} is your Smash Club code`,
     html: layout(
-      "Sign in to Smash Club",
-      `<p style="font-size:16px;line-height:1.6;margin:0 0 8px;">Tap the button below to sign in. The link works once and expires in 15 minutes.</p>
-       ${button(link, "Sign in")}
-       <p style="font-size:13px;color:#444934;margin:0;">If the button does not work, paste this into your browser:<br>
-       <span style="word-break:break-all;color:#506600;">${
-        escapeHtml(link)
-      }</span></p>
-       <p style="font-size:13px;color:#444934;margin:16px 0 0;">Did not request this? Ignore this email and nothing will happen.</p>`,
+      "Your sign-in code",
+      `<p style="font-size:16px;line-height:1.6;margin:0 0 16px;">Type this code into the app to sign in. It works once and expires in 15 minutes.</p>
+       <p style="font-size:38px;font-weight:800;letter-spacing:0.18em;color:#161f00;margin:0 0 16px;text-align:center;font-family:ui-monospace,SFMono-Regular,Menlo,monospace;">${
+        escapeHtml(spaced)
+      }</p>
+       <p style="font-size:13px;color:#444934;margin:0;">Did not request this? Ignore this email and nothing will happen. Nobody can sign in without the code.</p>`,
     ),
     text: [
-      "Sign in to Smash Club",
+      "Your Smash Club sign-in code",
       "",
-      "Open this link to sign in. It works once and expires in 15 minutes:",
-      link,
+      spaced,
+      "",
+      "Type it into the app. It works once and expires in 15 minutes.",
       "",
       "Did not request this? Ignore this email.",
     ].join("\n"),

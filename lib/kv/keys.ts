@@ -45,8 +45,15 @@ export const keys = {
   session: (sessionId: string) => ["session", sessionId] as const,
   sessionsByUser: (userId: string, sessionId: string) =>
     ["sessions_by_user", userId, sessionId] as const,
-  /** Key is a hash of the token; the raw token is never stored. */
-  magicToken: (tokenHash: string) => ["magic_token", tokenHash] as const,
+  /**
+   * Pending sign-in code, keyed by the address it was sent to.
+   *
+   * The address rather than the code, because six digits collide: two people
+   * signing in at once could otherwise be issued the same key, and verifying
+   * would be a race. The code itself is stored hashed inside the record, so a
+   * database dump yields nothing that can be typed in.
+   */
+  magicToken: (emailLower: string) => ["magic_token", emailLower] as const,
   /** Rate-limit counter, bucketed by time window and self-expiring. */
   rate: (scope: string, subject: string, windowStart: number) =>
     ["rate", scope, subject, windowStart] as const,

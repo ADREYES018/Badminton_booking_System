@@ -509,3 +509,35 @@ filename, and no hardcoded link left in the shell.
 The standalone error page keeps every rule inline. It cannot know the hashed
 stylesheet's name, and an error page that only renders when the build went well
 is an error page that fails exactly when it is needed.
+
+### Sign-in is a code, not a link
+
+Six digits typed into the app, rather than a link tapped in an email.
+
+The link had to go. Mail providers fetch the links in a message before their
+recipient ever opens it, and a single-use link is spent by that fetch — the
+person it was sent to then gets "this link has expired" on a link that is
+seconds old, and asking for another one produces the same result forever.
+
+Confirming rather than consuming on `GET` fixes that, and was the first attempt
+here: the link opened a page with a Sign in button, and only the button spent
+the token. It works, and it leaves sign-in as two screens and a round trip
+through a URL that some clients still rewrite, wrap or truncate. A code has none
+of that surface. There is nothing to follow, so nothing can be followed on the
+reader's behalf.
+
+Six digits rather than five characters. Digits are unambiguous read aloud and
+get a numeric keypad on a phone; five characters mixing letters and digits
+invites the O/0 and I/1 confusions precisely when someone is reading a code off
+one device onto another.
+
+The trade is that six digits is a million combinations rather than a 32-byte
+token's astronomical number, so guessing becomes conceivable. Wrong answers are
+counted against the record and the code is destroyed after five, which makes
+brute force hopeless while leaving room for a typo. The existing per-address and
+per-IP rate limits still sit in front of that.
+
+The record is keyed by the address rather than by the code, because six digits
+collide: keying by the code would let two people signing in at once be issued
+the same key. Asking again replaces whatever was pending, so an earlier email
+stops working rather than leaving two codes live.

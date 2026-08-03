@@ -330,8 +330,15 @@ export interface MagicToken {
   v: 1;
   email: string;
   emailLower: string;
+  /** SHA-256 of the six digits. The code itself is never stored. */
+  codeHash: string;
   ip?: string;
   createdAt: string;
   /** Where to send the user after a successful login. */
   redirectTo?: string;
+  /**
+   * Wrong guesses so far. A code is six digits, so it is guessable in a way a
+   * 32-byte token never was; the record is destroyed once this runs out.
+   */
+  attempts: number;
 }

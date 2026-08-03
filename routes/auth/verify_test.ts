@@ -1,9 +1,10 @@
 /**
- * Route-level tests for the magic-link landing page.
+ * Route-level tests for signing in with a code.
  *
- * The case that matters most is the one that broke in production: mail
- * providers fetch links before their recipient sees them, so following the
- * link must not spend the token.
+ * Sign-in used to be a link, and mail providers fetch the links in a message
+ * before their recipient sees them — a single-use link was routinely spent by
+ * that fetch and its owner told it had expired. A code cannot be followed, and
+ * the first test here is that nothing about opening the page consumes one.
  */
 
 import { assertEquals, assertStringIncludes } from "@std/assert";
@@ -17,7 +18,7 @@ Deno.env.set("APP_URL", "http://localhost:8000");
 
 const { app } = await import("../../main.ts");
 const { getKv } = await import("../../lib/kv/kv.ts");
-const { issueMagicToken, peekMagicToken } = await import(
+const { issueMagicToken, MAX_CODE_ATTEMPTS, peekMagicToken } = await import(
   "../../lib/auth/session.ts"
 );
 const { CSRF_COOKIE, CSRF_FIELD } = await import(
@@ -30,16 +31,13 @@ const kv = await getKv();
 
 const CSRF = "test-csrf-token";
 
-function visit(token: string) {
-  return handler(
-    new Request(`http://localhost:8000/auth/verify?token=${token}`),
-  );
-}
-
-function submit(token: string, options: { csrf?: string } = {}) {
+function submit(
+  fields: Record<string, string>,
+  options: { csrf?: string } = {},
+) {
   const body = new FormData();
   body.set(CSRF_FIELD, options.csrf ?? CSRF);
-  body.set("token", token);
+  for (const [key, value] of Object.entries(fields)) body.set(key, value);
   return handler(
     new Request("http://localhost:8000/auth/verify", {
       method: "POST",
@@ -49,94 +47,126 @@ function submit(token: string, options: { csrf?: string } = {}) {
   );
 }
 
-async function issue(label: string): Promise<{ token: string; email: string }> {
+async function issue(label: string): Promise<{ code: string; email: string }> {
   const email = `${label}-${crypto.randomUUID()}@example.com`;
-  const { token } = await issueMagicToken(kv, email);
-  return { token, email };
+  const { code } = await issueMagicToken(kv, email);
+  return { code, email };
 }
 
-Deno.test("following the link does not spend the token", async () => {
-  const { token, email } = await issue("scanned");
+/** Any code that is not the right one. */
+function wrongCode(code: string): string {
+  return code === "000000" ? "111111" : "000000";
+}
 
-  // Exactly what a mail provider's scanner does on the way to the inbox.
-  const scanned = await visit(token);
-  const body = await scanned.text();
+Deno.test("there is no link to follow, so nothing can spend a code early", async () => {
+  const { email, code } = await issue("no-get");
 
-  assertEquals(scanned.status, 200);
-  assertStringIncludes(body, "Sign in");
-  assertStringIncludes(body, email);
-  // The token is still there for the person the link was sent to.
-  assertEquals((await peekMagicToken(kv, token))?.emailLower, email);
+  // Whatever a mail provider does with this address, it cannot be a redemption.
+  const visited = await handler(
+    new Request("http://localhost:8000/auth/verify?code=" + code),
+  );
+  await visited.body?.cancel();
+
+  assertEquals(visited.status, 302);
+  assertStringIncludes(visited.headers.get("location") ?? "", "/auth/login");
+  // Still pending for the person it was sent to.
+  assertEquals((await peekMagicToken(kv, email))?.emailLower, email);
 });
 
-Deno.test("a scanned link still signs its owner in afterwards", async () => {
-  const { token, email } = await issue("after-scan");
+Deno.test("the right code opens a session", async () => {
+  const { email, code } = await issue("good");
 
-  await visit(token).then((r) => r.body?.cancel());
-  const response = await submit(token);
+  const response = await submit({ email, code });
   await response.body?.cancel();
 
   assertEquals(response.status, 302);
   assertStringIncludes(response.headers.get("location") ?? "", "/profile");
-  assertStringIncludes(
-    response.headers.get("set-cookie") ?? "",
-    "sc_session=",
-  );
-  // The account exists now, created on redemption.
+  assertStringIncludes(response.headers.get("set-cookie") ?? "", "sc_session=");
   assertEquals((await getUserByEmail(kv, email))?.emailLower, email);
 });
 
-Deno.test("the confirmation page hands out the CSRF cookie it needs", async () => {
-  const { token } = await issue("csrf-cookie");
-  const response = await visit(token);
+Deno.test("a code with spaces around it is still accepted", async () => {
+  const { email, code } = await issue("spaced");
+
+  const response = await submit({ email, code: `  ${code} ` });
   await response.body?.cancel();
 
-  // The recipient arrives from their inbox with no cookie yet.
-  assertStringIncludes(response.headers.get("set-cookie") ?? "", CSRF_COOKIE);
+  assertEquals(response.status, 302);
 });
 
-Deno.test("signing in spends the token, so a second attempt is refused", async () => {
-  const { token } = await issue("single-use");
+Deno.test("a wrong code returns to the form rather than starting over", async () => {
+  const { email, code } = await issue("typo");
 
-  const first = await submit(token);
+  const response = await submit({ email, code: wrongCode(code) });
+  const body = await response.text();
+
+  assertEquals(response.status, 200);
+  assertStringIncludes(body, "That code is not right");
+  // The form comes back ready for another go, still knowing the address.
+  assertStringIncludes(body, `value="${email}"`);
+
+  // And the real code still works.
+  const retry = await submit({ email, code });
+  await retry.body?.cancel();
+  assertEquals(retry.status, 302);
+});
+
+Deno.test("too many wrong tries cancels the code", async () => {
+  const { email, code } = await issue("guessed");
+  const wrong = wrongCode(code);
+
+  for (let i = 1; i < MAX_CODE_ATTEMPTS; i++) {
+    const attempt = await submit({ email, code: wrong });
+    await attempt.body?.cancel();
+  }
+
+  const last = await submit({ email, code: wrong });
+  assertStringIncludes(await last.text(), "Too many wrong tries");
+
+  // The real code is gone too, so guessing cannot be resumed.
+  const refused = await submit({ email, code });
+  assertStringIncludes(
+    await refused.text(),
+    "expired or has already been used",
+  );
+});
+
+Deno.test("a code works once", async () => {
+  const { email, code } = await issue("once");
+
+  const first = await submit({ email, code });
   await first.body?.cancel();
   assertEquals(first.status, 302);
 
-  const second = await submit(token);
-  const body = await second.text();
-  assertEquals(second.status, 200);
-  assertStringIncludes(body, "already been used or has expired");
-  assertEquals(await peekMagicToken(kv, token), null);
-});
-
-Deno.test("an unknown token is refused on both the page and the form", async () => {
-  const visited = await visit("not-a-real-token");
+  const second = await submit({ email, code });
   assertStringIncludes(
-    await visited.text(),
-    "already been used or has expired",
-  );
-
-  const submitted = await submit("not-a-real-token");
-  assertStringIncludes(
-    await submitted.text(),
-    "already been used or has expired",
+    await second.text(),
+    "expired or has already been used",
   );
 });
 
-Deno.test("a link with no token at all is refused", async () => {
-  const response = await handler(
-    new Request("http://localhost:8000/auth/verify"),
-  );
-  assertStringIncludes(await response.text(), "missing its token");
+Deno.test("someone else's code does not work for your address", async () => {
+  const theirs = await issue("theirs");
+  const mine = await issue("mine");
+
+  const response = await submit({ email: mine.email, code: theirs.code });
+  assertStringIncludes(await response.text(), "That code is not right");
+
+  // Their code is untouched by the attempt.
+  assertEquals((await peekMagicToken(kv, theirs.email))?.attempts, 0);
+});
+
+Deno.test("a submission with no address is refused", async () => {
+  const response = await submit({ code: "123456" });
+  assertStringIncludes(await response.text(), "which address");
 });
 
 Deno.test("a forged CSRF token cannot sign anyone in", async () => {
-  const { token } = await issue("forged");
+  const { email, code } = await issue("forged");
 
-  const response = await submit(token, { csrf: "not-the-real-token" });
-  const body = await response.text();
+  const response = await submit({ email, code }, { csrf: "not-the-token" });
+  assertStringIncludes(await response.text(), "went stale");
 
-  assertStringIncludes(body, "went stale");
-  // Refusing must not have spent the token: the real owner can still use it.
-  assertEquals((await peekMagicToken(kv, token)) !== null, true);
+  // Refusing must not have spent the code.
+  assertEquals((await peekMagicToken(kv, email))?.emailLower, email);
 });

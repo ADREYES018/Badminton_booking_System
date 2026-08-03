@@ -1,67 +1,150 @@
-import { assertEquals, assertNotEquals } from "@std/assert";
+import { assertEquals, assertMatch, assertNotEquals } from "@std/assert";
 import {
-  consumeMagicToken,
   createSession,
   destroyAllSessions,
   destroySession,
   getSession,
   issueMagicToken,
+  MAX_CODE_ATTEMPTS,
+  peekMagicToken,
   rateLimit,
   readSessionCookie,
   sessionCookie,
+  verifyLoginCode,
 } from "./session.ts";
 import { createUser, findOrCreateUser, getUserByEmail } from "../data/users.ts";
 import { setTestEnv, withTestKv } from "../testing/kv_test_helper.ts";
 import { keys } from "../kv/keys.ts";
-import { sha256Hex } from "../crypto.ts";
 
 setTestEnv();
 
-Deno.test("magic token is stored hashed, never in clear", async () => {
+const EMAIL = "player@example.com";
+
+Deno.test("a sign-in code is six digits", async () => {
   await withTestKv(async (kv) => {
-    const { token } = await issueMagicToken(kv, "player@example.com");
-
-    // The raw token must not be a key in the database.
-    const rawLookup = await kv.get(keys.magicToken(token));
-    assertEquals(rawLookup.value, null);
-
-    // Only its hash is.
-    const hashed = await kv.get(keys.magicToken(await sha256Hex(token)));
-    assertNotEquals(hashed.value, null);
+    const { code } = await issueMagicToken(kv, EMAIL);
+    assertMatch(code, /^[0-9]{6}$/);
   });
 });
 
-Deno.test("magic token can only be redeemed once", async () => {
+Deno.test("the code is stored hashed, never in clear", async () => {
   await withTestKv(async (kv) => {
-    const { token } = await issueMagicToken(kv, "player@example.com");
+    const { code } = await issueMagicToken(kv, EMAIL);
 
-    const first = await consumeMagicToken(kv, token);
-    assertEquals(first?.emailLower, "player@example.com");
-
-    // A second click on the same link must fail.
-    const second = await consumeMagicToken(kv, token);
-    assertEquals(second, null);
+    const stored = await kv.get(keys.magicToken(EMAIL));
+    assertNotEquals(stored.value, null);
+    // A database dump must not yield anything that can be typed in.
+    assertEquals(JSON.stringify(stored.value).includes(code), false);
   });
 });
 
-Deno.test("two concurrent redemptions of one token yield exactly one login", async () => {
+Deno.test("the right code signs in and names the address it was for", async () => {
   await withTestKv(async (kv) => {
-    const { token } = await issueMagicToken(kv, "player@example.com");
+    const { code } = await issueMagicToken(kv, EMAIL);
+    const result = await verifyLoginCode(kv, EMAIL, code);
+
+    assertEquals(result.ok, true);
+    if (result.ok) assertEquals(result.claim.emailLower, EMAIL);
+  });
+});
+
+Deno.test("a code works once", async () => {
+  await withTestKv(async (kv) => {
+    const { code } = await issueMagicToken(kv, EMAIL);
+
+    assertEquals((await verifyLoginCode(kv, EMAIL, code)).ok, true);
+
+    const again = await verifyLoginCode(kv, EMAIL, code);
+    assertEquals(again.ok, false);
+    if (!again.ok) assertEquals(again.reason, "unknown");
+  });
+});
+
+Deno.test("three concurrent submissions of one code yield exactly one login", async () => {
+  await withTestKv(async (kv) => {
+    const { code } = await issueMagicToken(kv, EMAIL);
 
     const results = await Promise.all([
-      consumeMagicToken(kv, token),
-      consumeMagicToken(kv, token),
-      consumeMagicToken(kv, token),
+      verifyLoginCode(kv, EMAIL, code),
+      verifyLoginCode(kv, EMAIL, code),
+      verifyLoginCode(kv, EMAIL, code),
     ]);
 
-    const successes = results.filter((r) => r !== null);
-    assertEquals(successes.length, 1);
+    assertEquals(results.filter((r) => r.ok).length, 1);
   });
 });
 
-Deno.test("unknown magic token is rejected", async () => {
+Deno.test("a wrong code is refused but leaves the real one usable", async () => {
   await withTestKv(async (kv) => {
-    assertEquals(await consumeMagicToken(kv, "not-a-real-token"), null);
+    const { code } = await issueMagicToken(kv, EMAIL);
+    const wrong = code === "000000" ? "111111" : "000000";
+
+    const refused = await verifyLoginCode(kv, EMAIL, wrong);
+    assertEquals(refused.ok, false);
+    if (!refused.ok) assertEquals(refused.reason, "wrong");
+
+    // A typo must not cost someone their code.
+    assertEquals((await verifyLoginCode(kv, EMAIL, code)).ok, true);
+  });
+});
+
+Deno.test("a code is destroyed after too many wrong tries", async () => {
+  await withTestKv(async (kv) => {
+    const { code } = await issueMagicToken(kv, EMAIL);
+    const wrong = code === "000000" ? "111111" : "000000";
+
+    for (let i = 1; i < MAX_CODE_ATTEMPTS; i++) {
+      const result = await verifyLoginCode(kv, EMAIL, wrong);
+      assertEquals(result.ok, false);
+      if (!result.ok) assertEquals(result.reason, "wrong", `attempt ${i}`);
+    }
+
+    const last = await verifyLoginCode(kv, EMAIL, wrong);
+    assertEquals(last.ok, false);
+    if (!last.ok) assertEquals(last.reason, "exhausted");
+
+    // Guessing it away must not leave the real code usable either.
+    assertEquals(await peekMagicToken(kv, EMAIL), null);
+    assertEquals((await verifyLoginCode(kv, EMAIL, code)).ok, false);
+  });
+});
+
+Deno.test("asking again replaces the pending code", async () => {
+  await withTestKv(async (kv) => {
+    const first = await issueMagicToken(kv, EMAIL);
+    const second = await issueMagicToken(kv, EMAIL);
+
+    // The earlier email must stop working, or two codes are live at once.
+    assertEquals((await verifyLoginCode(kv, EMAIL, first.code)).ok, false);
+    assertEquals((await verifyLoginCode(kv, EMAIL, second.code)).ok, true);
+  });
+});
+
+Deno.test("a code belongs to the address it was sent to", async () => {
+  await withTestKv(async (kv) => {
+    const { code } = await issueMagicToken(kv, EMAIL);
+    const result = await verifyLoginCode(kv, "someone-else@example.com", code);
+
+    assertEquals(result.ok, false);
+    if (!result.ok) assertEquals(result.reason, "unknown");
+  });
+});
+
+Deno.test("the address is matched regardless of how it is typed", async () => {
+  await withTestKv(async (kv) => {
+    const { code } = await issueMagicToken(kv, "Player@Example.COM");
+    assertEquals(
+      (await verifyLoginCode(kv, " player@example.com ", code)).ok,
+      true,
+    );
+  });
+});
+
+Deno.test("an address with no code pending is refused", async () => {
+  await withTestKv(async (kv) => {
+    const result = await verifyLoginCode(kv, "nobody@example.com", "123456");
+    assertEquals(result.ok, false);
+    if (!result.ok) assertEquals(result.reason, "unknown");
   });
 });
 

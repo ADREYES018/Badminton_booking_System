@@ -26,34 +26,8 @@ import { isValidEmail, normalizeEmail } from "../../lib/domain/validate.ts";
 import { EmailError, magicLinkEmail, sendEmail } from "../../lib/email.ts";
 
 function LoginPage(
-  props: { csrf: string; error?: string; sent?: string; next?: string },
+  props: { csrf: string; error?: string; next?: string },
 ) {
-  if (props.sent) {
-    return (
-      <Page bare>
-        <div class="w-full max-w-sm flex flex-col items-center text-center gap-6">
-          <LogoVertical class="w-40 h-auto text-on-surface" />
-          <div>
-            <h1 class="text-headline-lg text-on-surface mb-2">
-              Check your email
-            </h1>
-            <p class="text-body-md text-on-surface-variant">
-              If an account can be created for{" "}
-              <span class="font-bold text-on-surface">{props.sent}</span>, a
-              sign-in link is on its way. It expires in 15 minutes.
-            </p>
-          </div>
-          <a
-            href="/auth/login"
-            class="text-label font-bold text-primary hover:underline"
-          >
-            Use a different email
-          </a>
-        </div>
-      </Page>
-    );
-  }
-
   return (
     <Page bare>
       <div class="w-full max-w-sm flex flex-col gap-8">
@@ -61,7 +35,7 @@ function LoginPage(
           <LogoVertical class="w-44 h-auto text-on-surface" />
           <h1 class="text-headline-lg text-on-surface">Welcome to the club</h1>
           <p class="text-body-md text-on-surface-variant">
-            No passwords here. We email you a link that signs you straight in.
+            No passwords here. We email you a six-digit code.
           </p>
         </div>
 
@@ -79,8 +53,69 @@ function LoginPage(
             required
             placeholder="you@email.com"
           />
-          <Button type="submit" fullWidth>Send me a sign-in link</Button>
+          <Button type="submit" fullWidth>Email me a code</Button>
         </form>
+      </div>
+    </Page>
+  );
+}
+
+/**
+ * Where the code is typed in.
+ *
+ * The address is carried in a hidden field rather than a cookie or a session,
+ * so the code can be finished in a different tab from the one that asked for
+ * it — a thing people do without thinking when they go and open their email.
+ */
+function CodePage(
+  props: { csrf: string; email: string; error?: string; next?: string },
+) {
+  return (
+    <Page bare>
+      <div class="w-full max-w-sm flex flex-col gap-8">
+        <div class="flex flex-col items-center text-center gap-4">
+          <LogoVertical class="w-40 h-auto text-on-surface" />
+          <div>
+            <h1 class="text-headline-lg text-on-surface mb-2">
+              Check your email
+            </h1>
+            <p class="text-body-md text-on-surface-variant">
+              If an account can be created for{" "}
+              <span class="font-bold text-on-surface">{props.email}</span>, a
+              six-digit code is on its way. It expires in 15 minutes.
+            </p>
+          </div>
+        </div>
+
+        {props.error && <Alert tone="error">{props.error}</Alert>}
+
+        <form method="post" action="/auth/verify" class="flex flex-col gap-5">
+          <input type="hidden" name={CSRF_FIELD} value={props.csrf} />
+          <input type="hidden" name="email" value={props.email} />
+          {props.next && <input type="hidden" name="next" value={props.next} />}
+          <Field
+            label="Six-digit code"
+            name="code"
+            // A numeric keypad on a phone, and the platform's own one-time-code
+            // autofill where it is offered.
+            inputMode="numeric"
+            autoComplete="one-time-code"
+            pattern="[0-9]*"
+            maxLength={6}
+            required
+            autoFocus
+            placeholder="000000"
+            class="text-center text-[28px] tracking-[0.35em] font-bold"
+          />
+          <Button type="submit" fullWidth>Sign in</Button>
+        </form>
+
+        <a
+          href="/auth/login"
+          class="text-label font-bold text-primary hover:underline text-center"
+        >
+          Use a different email
+        </a>
       </div>
     </Page>
   );
@@ -158,13 +193,13 @@ export function loginRoutes(app: App<State>) {
       );
     }
 
-    const { token } = await issueMagicToken(kv, email, {
+    const { code } = await issueMagicToken(kv, email, {
       ip,
       redirectTo: next,
     });
 
     try {
-      await sendEmail(magicLinkEmail(email, token, next));
+      await sendEmail(magicLinkEmail(email, code));
     } catch (error) {
       console.error("Failed to send magic link", error);
 
@@ -188,6 +223,8 @@ export function loginRoutes(app: App<State>) {
 
     // Always the same confirmation, so the form reveals nothing about who is
     // already a member.
-    return ctx.render(<LoginPage csrf={csrf} sent={email} />);
+    return ctx.render(<CodePage csrf={csrf} email={email} next={next} />);
   });
 }
+
+export { CodePage };
