@@ -2,120 +2,95 @@
  * Check-in tokens.
  *
  * A player displays one of these; the organizer's scanner reads it and posts
- * it. The token proves *this player, this game, recently* — it does not prove
- * presence, because nothing can, and a design claiming otherwise would be
- * lying about what it knows.
+ * it. The token proves *this player* — it does not prove presence, because
+ * nothing can, and a design claiming otherwise would be lying about what it
+ * knows.
  *
- * What it does buy is that a code screenshotted and sent to an absent friend
- * the night before is useless, which is the realistic abuse. Anything stronger
- * (a code rotating every few seconds) trades a real failure mode — clock skew
- * at a venue with bad signal — for a marginal gain.
+ * One code per player, for every club and every game, forever. Phase 5 minted
+ * one per game and expired it in minutes, which meant a code could not be
+ * presented at a game it was not minted for. Nothing in the token enforces
+ * that now, so the caller does: `POST /games/:slug/checkin` refuses a player
+ * who is not confirmed on that game's roster. That check is what replaced
+ * expiry, and without it this token would mark anyone present anywhere.
  *
- * The organizer guard on `setAttendance` is the actual access control. These
- * functions are pure and hold no KV handle, so the rules here can be tested
- * without a database.
+ * A permanent code is worth screenshotting and will be screenshotted. The
+ * version field is the remedy: bumping it retires one player's code without
+ * touching anyone else's, where rotating the server secret would kill every
+ * code at once.
+ *
+ * The organizer guard on `setAttendance` remains the actual access control.
+ * These functions are pure and hold no KV handle, so the rules here can be
+ * tested without a database.
  */
 
 import { hmacHex, timingSafeEqual } from "../crypto.ts";
-
-/**
- * Seconds per validity bucket.
- *
- * Verification accepts the current bucket and the one before it, so the window
- * a code is usable for is between five and ten minutes depending on where in
- * the bucket it was minted. Long enough to walk from the door to the desk,
- * short enough that a code shared earlier that day has expired.
- */
-export const CHECKIN_WINDOW_SECONDS = 300;
+import type { User } from "../types.ts";
 
 /** How many hex characters of the HMAC the token carries. */
 const MAC_LENGTH = 16;
 
 export class CheckinError extends Error {}
 
-/** The bucket an instant falls in. */
-export function windowAt(now: Date = new Date()): number {
-  return Math.floor(now.getTime() / 1000 / CHECKIN_WINDOW_SECONDS);
+/** A record written before this phase has no version and counts as the first. */
+export function checkinVersionOf(user: User): number {
+  return user.checkinVersion ?? 1;
 }
 
-async function sign(
-  gameId: string,
-  userId: string,
-  window: number,
-): Promise<string> {
-  const mac = await hmacHex(`checkin:${gameId}:${userId}:${window}`);
+async function sign(userId: string, version: number): Promise<string> {
+  // `v2` is inside the signed bytes, so no Phase 5 token can verify here even
+  // by accident.
+  const mac = await hmacHex(`checkin:v2:${userId}:${version}`);
   return mac.slice(0, MAC_LENGTH);
 }
 
 /**
- * A token for one player at one game, valid from now.
+ * The permanent code for one player.
  *
- * The game and user ids travel in the clear. They are not secrets — the
- * roster is visible to every member — and carrying them means the scanner can
- * name the player before the server replies.
+ * The user id travels in the clear. It is not a secret — every member can see
+ * the roster — and carrying it means the scanner can name the player before
+ * the server replies.
  */
 export async function mintCheckinToken(
-  gameId: string,
   userId: string,
-  now: Date = new Date(),
+  version = 1,
 ): Promise<string> {
-  const window = windowAt(now);
-  const mac = await sign(gameId, userId, window);
-  return `${gameId}.${userId}.${window}.${mac}`;
+  const mac = await sign(userId, version);
+  return `${userId}.${version}.${mac}`;
 }
 
 export interface CheckinClaim {
-  gameId: string;
   userId: string;
+  version: number;
 }
 
 /**
  * Reads a token back, or refuses it.
  *
- * `expectedGameId` is required rather than optional. A token is only ever
- * verified in the context of a game the caller has already loaded and checked
- * permissions against, and making the caller pass it means a token minted for
- * one game cannot be spent on another by omission.
+ * A valid claim means the code was minted by this server for this player at
+ * this version. It says nothing about which game, or whether the version is
+ * still current — the caller holds the user record needed to answer that.
  */
 export async function verifyCheckinToken(
   token: string,
-  expectedGameId: string,
-  now: Date = new Date(),
 ): Promise<CheckinClaim> {
   const parts = token.trim().split(".");
-  if (parts.length !== 4) {
+  // Phase 5 tokens carried four parts. Rejecting on count refuses them before
+  // any signature is computed.
+  if (parts.length !== 3) {
     throw new CheckinError("That is not a check-in code.");
   }
 
-  const [gameId, userId, windowText, mac] = parts as [
-    string,
-    string,
-    string,
-    string,
-  ];
+  const [userId, versionText, mac] = parts as [string, string, string];
 
-  if (gameId !== expectedGameId) {
-    throw new CheckinError("That code is for a different game.");
-  }
-
-  const window = Number(windowText);
-  if (!Number.isInteger(window)) {
+  const version = Number(versionText);
+  if (!Number.isInteger(version) || version < 1) {
     throw new CheckinError("That is not a check-in code.");
   }
 
-  const current = windowAt(now);
-  // The previous bucket is accepted so a code read as the clock rolls over
-  // still works. A future bucket is not: it would mean a clock ahead of the
-  // server's, and accepting it would extend the token's life rather than
-  // preserve it.
-  if (window !== current && window !== current - 1) {
-    throw new CheckinError("That code has expired. Ask for a fresh one.");
-  }
-
-  const expected = await sign(gameId, userId, window);
+  const expected = await sign(userId, version);
   if (!timingSafeEqual(mac, expected)) {
     throw new CheckinError("That code could not be verified.");
   }
 
-  return { gameId, userId };
+  return { userId, version };
 }

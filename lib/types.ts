@@ -46,6 +46,11 @@ export interface User {
   /** Present when a photo exists at keys.photo(id). */
   hasPhoto: boolean;
   role: PlatformRole;
+  /**
+   * Bumped to retire a leaked check-in code. Absent means 1, so no existing
+   * record needs migrating.
+   */
+  checkinVersion?: number;
   /** Player's own refund account. Distinct from a group's payout account. */
   iban?: StoredIban;
   emailOptIn: boolean;
