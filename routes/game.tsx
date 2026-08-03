@@ -34,6 +34,7 @@ import {
 } from "../components/GameCard.tsx";
 import RsvpButton from "../islands/RsvpButton.tsx";
 import { hasBill, PaymentPanel } from "../components/PaymentPanel.tsx";
+import { ResultsPanel } from "../components/ResultsPanel.tsx";
 import {
   CSRF_FIELD,
   csrfCookie,
@@ -55,6 +56,7 @@ import {
   removeGuest,
 } from "../lib/data/signups.ts";
 import { getUser } from "../lib/data/users.ts";
+import { listMatchesForGame } from "../lib/data/matches.ts";
 import { sweepInBackground } from "../lib/data/sweep.ts";
 import {
   capacityOf,
@@ -74,7 +76,7 @@ import {
   skillWarning,
 } from "../lib/domain/join_rules.ts";
 import { cleanText } from "../lib/domain/validate.ts";
-import type { Game, PayoutDetails, Signup, User } from "../lib/types.ts";
+import type { Game, Match, PayoutDetails, Signup, User } from "../lib/types.ts";
 
 interface RosterMember {
   signup: Signup;
@@ -93,6 +95,7 @@ interface DetailProps {
   payout?: PayoutDetails;
   /** Organizers see the settlement link and the attendance controls. */
   isOrganizer: boolean;
+  matches: Match[];
   error?: string;
   notice?: string;
 }
@@ -303,6 +306,8 @@ function GameDetail(props: DetailProps) {
   const empty = game.frozenPerHeadFils === undefined &&
     game.confirmedCount === 0;
   const frozen = game.frozenPerHeadFils !== undefined;
+  // There is nothing to report a result about until people have played.
+  const started = new Date(game.startUtc).getTime() <= Date.now();
 
   return (
     <Page user={user} nav="games">
@@ -408,6 +413,21 @@ function GameDetail(props: DetailProps) {
             </p>
           )}
         </Card>
+
+        {started && (
+          <ResultsPanel
+            matches={props.matches}
+            roster={props.confirmed.map(({ signup, user }) => ({
+              userId: signup.userId,
+              user,
+            }))}
+            viewerId={user.id}
+            slug={game.slug}
+            csrf={props.csrf}
+            csrfField={CSRF_FIELD}
+            canReport={viewerStateOf(props.signup) === "confirmed"}
+          />
+        )}
       </div>
     </Page>
   );
@@ -451,10 +471,11 @@ export function gameRoute(app: App<State>) {
     // One read covers both: the group carries the payout details a player
     // needs to transfer their share, and the access flag decides whether the
     // organizer's controls render.
-    const [signup, roster, access] = await Promise.all([
+    const [signup, roster, access, matches] = await Promise.all([
       getSignup(kv, game.id, user.id),
       loadDetail(kv, game),
       loadGroupAccess(ctx.state.auth, game.groupId),
+      listMatchesForGame(kv, game.id),
     ]);
 
     const response = await ctx.render(
@@ -465,6 +486,7 @@ export function gameRoute(app: App<State>) {
         csrf={ctx.state.auth.csrfToken}
         payout={access.group.payout}
         isOrganizer={access.isOrganizer}
+        matches={matches}
         error={url.searchParams.get("error") ?? undefined}
         notice={url.searchParams.get("notice") ?? undefined}
         {...roster}
