@@ -12,9 +12,21 @@
 
 import type { App } from "fresh";
 import type { State } from "../main.ts";
-import { HttpError, requireOrganizer } from "../lib/auth/middleware.ts";
-import { act, backToGame } from "./game_action.ts";
-import { confirmPaid, markPaid, refundPayment } from "../lib/data/signups.ts";
+import {
+  clientIp,
+  HttpError,
+  requireOrganizer,
+} from "../lib/auth/middleware.ts";
+import { act, backToGame, begin } from "./game_action.ts";
+import {
+  confirmPaid,
+  markPaid,
+  refundPayment,
+  SignupError,
+} from "../lib/data/signups.ts";
+import { audit } from "../lib/data/audit.ts";
+import { getUser } from "../lib/data/users.ts";
+import { CheckinError, verifyCheckinToken } from "../lib/domain/checkin.ts";
 import {
   confirmMatch,
   listMatchesForGame,
@@ -166,6 +178,67 @@ export function gameActionRoutes(app: App<State>) {
         };
       }),
   );
+
+  // ---- Check-in -----------------------------------------------------------
+
+  /**
+   * Marks a player present from a scanned code.
+   *
+   * The only JSON endpoint in the app. Every other action is a form POST that
+   * redirects, but a scanner works through a queue: reloading the page between
+   * players would lose the camera stream and the organizer's place in the
+   * line. The reply carries the player's name so the island can confirm who
+   * was just admitted.
+   *
+   * The organizer guard is what makes the direction of the scan safe — the
+   * POST comes from the organizer's browser carrying a token the player
+   * displayed, so a player replaying their own token still cannot mark
+   * themselves.
+   */
+  app.post("/games/:slug/checkin", async (ctx) => {
+    const context = await begin(ctx);
+    const { kv, form, game } = context;
+
+    await requireOrganizer(ctx.state.auth, game.groupId);
+
+    const reply = (status: number, body: Record<string, unknown>) =>
+      new Response(JSON.stringify(body), {
+        status,
+        headers: { "content-type": "application/json" },
+      });
+
+    try {
+      const token = form.get("token")?.toString() ?? "";
+      const claim = await verifyCheckinToken(token, game.id);
+
+      await setAttendance(kv, game.id, claim.userId, true, {
+        groupId: game.groupId,
+      });
+
+      await audit(kv, {
+        actorId: context.user.id,
+        action: "signup.attendance_overridden",
+        targetId: game.id,
+        groupId: game.groupId,
+        ip: clientIp(ctx.req),
+      });
+
+      const player = await getUser(kv, claim.userId);
+      return reply(200, {
+        ok: true,
+        userId: claim.userId,
+        name: player?.name ?? "Player",
+      });
+    } catch (error) {
+      // A bad code is an ordinary event at a door — a stale screenshot, a
+      // code for last week's game. It comes back as a message the scanner can
+      // show, not as a 500.
+      if (error instanceof CheckinError || error instanceof SignupError) {
+        return reply(400, { ok: false, error: error.message });
+      }
+      throw error;
+    }
+  });
 
   // ---- Attendance ---------------------------------------------------------
 

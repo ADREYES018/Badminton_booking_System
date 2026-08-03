@@ -23,6 +23,7 @@ import { organizerGameRoutes } from "./routes/organizer/games.tsx";
 import { settlementRoute } from "./routes/organizer/settlement.tsx";
 import { profileRoutes } from "./routes/profile.tsx";
 import { statsRoute } from "./routes/stats.tsx";
+import { checkinRoute } from "./routes/checkin.tsx";
 import { photoRoute } from "./routes/api/photo.ts";
 import { manifestRoute } from "./routes/api/manifest.ts";
 
@@ -64,6 +65,7 @@ gameRoute(app);
 gameActionRoutes(app);
 profileRoutes(app);
 statsRoute(app);
+checkinRoute(app);
 photoRoute(app);
 manifestRoute(app);
 
