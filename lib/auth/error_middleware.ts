@@ -53,9 +53,11 @@ function renderErrorPage(status: number, message: string): string {
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>${status} · Smash Club</title>
-<link rel="stylesheet" href="/styles.css">
 </head>
-<body class="bg-surface text-on-surface">
+<!-- Every rule here is inline. The compiled stylesheet has a hashed name this
+     page cannot know, and an error page that depends on the build having
+     succeeded is an error page that fails when it is most needed. -->
+<body style="margin:0;background:#f9fbe7;color:#161f00;font-family:system-ui,sans-serif;">
   <main style="min-height:100dvh;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:12px;padding:24px;text-align:center;">
     <p style="font-size:13px;letter-spacing:0.12em;text-transform:uppercase;color:#506600;font-weight:700;">Smash Club</p>
     <h1 style="font-size:32px;margin:0;">${status}</h1>

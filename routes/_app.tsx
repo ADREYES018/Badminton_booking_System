@@ -36,7 +36,7 @@ export default function App({ Component }: PageProps) {
         <link rel="apple-touch-icon" href="/icons/icon-192.png" />
         <meta name="apple-mobile-web-app-capable" content="yes" />
         <meta name="apple-mobile-web-app-title" content="Smash Club" />
-        <link rel="stylesheet" href="/styles.css" />
+        {/* No stylesheet link: Vite injects the compiled, hashed one. */}
         <script
           // deno-lint-ignore react-no-danger -- static constant, must run before paint to avoid a light flash
           dangerouslySetInnerHTML={{ __html: THEME_BOOTSTRAP }}

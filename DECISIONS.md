@@ -485,3 +485,27 @@ inside those fifteen minutes would admit whoever else opens it.
 Requests arriving from an inbox carry no CSRF cookie, so the confirmation page
 sets one. A refused CSRF check leaves the token unspent, or a forged submission
 would be a way to burn someone else's link.
+
+### The stylesheet has to be in the module graph
+
+`assets/styles.css`, imported by `client.ts`, with no `<link>` in the shell.
+
+Tailwind compiles through Vite. A stylesheet sitting in `static/` and named by a
+hand-written `<link rel="stylesheet" href="/styles.css">` is invisible to the
+module graph, so Vite copies it instead of compiling it: the browser receives
+`@import "tailwindcss"`, a `@theme` block it does not understand, and no utility
+classes at all. Every page renders as bare HTML — serif text, blue underlined
+links, no layout.
+
+Nothing failed on the way to that. The build succeeded, all tests passed, and
+the server returned 200 with a stylesheet link pointing at a real file. It was
+6KB of design tokens rather than 25KB of compiled rules, and only a browser
+could tell.
+
+`routes/app_shell_test.ts` now asserts against the built output: no raw
+`@import` in the shipped CSS, several utility classes present, a hashed
+filename, and no hardcoded link left in the shell.
+
+The standalone error page keeps every rule inline. It cannot know the hashed
+stylesheet's name, and an error page that only renders when the build went well
+is an error page that fails exactly when it is needed.
