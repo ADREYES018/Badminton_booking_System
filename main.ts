@@ -17,6 +17,8 @@ import { loginRoutes } from "./routes/auth/login.tsx";
 import { verifyRoute } from "./routes/auth/verify.tsx";
 import { logoutRoute } from "./routes/auth/logout.ts";
 import { groupsRoutes } from "./routes/groups.tsx";
+import { groupMemberRoutes } from "./routes/group_members.tsx";
+import { groupSettingsRoutes } from "./routes/group_settings.tsx";
 import { gamesRoute } from "./routes/games.tsx";
 import { gameRoute } from "./routes/game.tsx";
 import { gameActionRoutes } from "./routes/game_actions.tsx";
@@ -58,6 +60,8 @@ loginRoutes(app);
 verifyRoute(app);
 logoutRoute(app);
 groupsRoutes(app);
+groupMemberRoutes(app);
+groupSettingsRoutes(app);
 gamesRoute(app);
 // Registered before /games/:slug so the organizer paths are not swallowed by
 // the slug pattern.

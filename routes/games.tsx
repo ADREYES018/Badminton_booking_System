@@ -147,12 +147,20 @@ export function gamesRoute(app: App<State>) {
               </p>
             </div>
             {access.isOrganizer && (
-              <LinkButton
-                href={`/g/${group.slug}/organizer/games/new`}
-                variant="primary"
-              >
-                New game
-              </LinkButton>
+              <div class="flex items-center gap-3">
+                <a
+                  href={`/g/${group.slug}/members`}
+                  class="text-label font-bold text-on-surface-variant hover:text-primary transition-colors"
+                >
+                  Members
+                </a>
+                <LinkButton
+                  href={`/g/${group.slug}/organizer/games/new`}
+                  variant="primary"
+                >
+                  New game
+                </LinkButton>
+              </div>
             )}
           </div>
 

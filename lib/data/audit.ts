@@ -21,6 +21,7 @@ export type AuditAction =
   | "group.payout_updated"
   | "member.added"
   | "member.invited"
+  | "member.request_decided"
   | "member.role_changed"
   | "member.blocked"
   | "member.unblocked"
