@@ -83,9 +83,68 @@ checker flags.
 - **Nobody joins a club by looking at it.** Membership comes from an invite
   link, an organizer adding a known address, or a request an organizer approves.
 
+## Deploying
+
+Built for Deno Deploy, which provides managed KV — leave `KV_PATH` unset there
+and `Deno.openKv()` finds the assigned database on its own.
+
+**1. Generate real secrets.** Never reuse the ones in `deno.json`'s demo task.
+
+```bash
+deno run -A tools/genkey.ts
+```
+
+Keep `IBAN_ENC_KEY` somewhere safe. It decrypts players' stored refund IBANs,
+and losing it makes them unreadable for good — there is no recovery path.
+
+**2. Create the app**, from the dashboard or the CLI:
+
+```bash
+deno deploy create --org <org> --app smash-club \
+  --source github --owner <you> --repo Badminton_booking_System \
+  --framework-preset fresh
+```
+
+**3. Provision KV and assign it.** This is not automatic.
+
+```bash
+deno deploy database provision smash-club-kv --kind denokv --org <org>
+deno deploy database assign smash-club-kv --app smash-club
+```
+
+**4. Set the environment.** `APP_URL` must be the real origin: every magic link
+and QR payload is built from it, and a deployment without it now refuses to
+start rather than handing out links pointing at localhost.
+
+| Variable            | Value                                              |
+| ------------------- | -------------------------------------------------- |
+| `APP_URL`           | `https://<your-app>.deno.dev`                      |
+| `APP_SECRET`        | from `genkey`, mark as secret                      |
+| `IBAN_ENC_KEY`      | from `genkey`, mark as secret                      |
+| `SUPER_ADMIN_EMAIL` | your address — promoted to platform owner on login |
+| `RESEND_API_KEY`    | from Resend, mark as secret                        |
+| `EMAIL_FROM`        | see below                                          |
+| `KV_PATH`           | **unset** — Deploy provides its own                |
+
+**5. Email.** Without `RESEND_API_KEY` the app logs magic links to the server
+console instead of sending them, which on a deployment means nobody can sign in.
+Resend's `onboarding@resend.dev` needs no domain and no DNS, but only delivers
+to the address that owns the Resend account:
+
+```
+EMAIL_FROM="Smash Club <onboarding@resend.dev>"
+```
+
+That is enough to sign in yourself and walk the whole app on a real phone.
+Inviting anyone else means verifying a domain in Resend and pointing
+`EMAIL_FROM` at it.
+
+**6. Sign in once** with `SUPER_ADMIN_EMAIL` to claim platform ownership, then
+create a club from `/groups`.
+
 ## Status
 
-Phases 1–5 are complete:
+All six phases are complete:
 
 - **Phase 1** — magic-link auth, sessions, role guards, profiles with encrypted
   refund IBANs, the KV layer, and the PWA shell.

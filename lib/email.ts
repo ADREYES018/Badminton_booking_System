@@ -19,8 +19,26 @@ export interface EmailMessage {
   text: string;
 }
 
+/**
+ * The public origin every magic link and QR payload is built from.
+ *
+ * Getting this wrong is silent and total: links point somewhere that is not
+ * the app, and nobody can sign in. Development falls back to localhost, but a
+ * deployment with `APP_URL` unset is refused rather than left to hand out dead
+ * links — `DENO_DEPLOYMENT_ID` is set by Deno Deploy and by nothing else.
+ */
 export function appUrl(): string {
-  return Deno.env.get("APP_URL") ?? "http://localhost:8000";
+  const configured = Deno.env.get("APP_URL");
+  if (configured) return configured;
+
+  if (Deno.env.get("DENO_DEPLOYMENT_ID")) {
+    throw new Error(
+      "APP_URL must be set in a deployment: magic links and QR codes are " +
+        "built from it, and a wrong value locks everyone out.",
+    );
+  }
+
+  return "http://localhost:8000";
 }
 
 function fromAddress(): string {
