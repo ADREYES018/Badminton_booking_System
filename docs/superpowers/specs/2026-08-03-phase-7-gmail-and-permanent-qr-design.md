@@ -1,7 +1,7 @@
 # Phase 7 — Gmail API email and one permanent QR per player
 
-Two changes that share a goal: let real players use the app. Today mail
-reaches exactly one address and a check-in code lives for ten minutes.
+Two changes that share a goal: let real players use the app. Today mail reaches
+exactly one address and a check-in code lives for ten minutes.
 
 ## Part 1 — the Gmail API replaces Resend
 
@@ -10,8 +10,8 @@ reaches exactly one address and a check-in code lives for ten minutes.
 Resend's free tier delivers only to the account owner's own address until a
 domain is verified. No domain is available, so nobody else can sign in.
 
-The club owns `smashclub.dxb@gmail.com`. The Gmail API sends *as* that account
-— mail leaves Google's own servers, signed by Google's own DKIM key for
+The club owns `smashclub.dxb@gmail.com`. The Gmail API sends _as_ that account —
+mail leaves Google's own servers, signed by Google's own DKIM key for
 `gmail.com`.
 
 That alignment is the reason for choosing this over a relay. A relay such as
@@ -30,8 +30,8 @@ credential with permission to send mail as the club, and is handled as one.
 ### Scope
 
 All changes live in `lib/email.ts`. Nothing outside it names a provider, so
-`magicLinkEmail`, `reminderEmail`, and both call sites
-(`routes/auth/login.tsx`, `lib/data/reminders.ts`) are untouched.
+`magicLinkEmail`, `reminderEmail`, and both call sites (`routes/auth/login.tsx`,
+`lib/data/reminders.ts`) are untouched.
 
 ### Contract
 
@@ -50,10 +50,10 @@ Returns `{access_token, expires_in}`. A failure here returns `400` with
 `{error, error_description}` — `invalid_grant` is the revoked-or-expired token,
 and is the one worth recognising by name.
 
-The token is cached in module scope and reused until a minute before its
-expiry. The minute of margin covers clock skew and the flight time of the send
-that follows. A cache miss costs one extra request, so the failure mode is
-slowness rather than breakage.
+The token is cached in module scope and reused until a minute before its expiry.
+The minute of margin covers clock skew and the flight time of the send that
+follows. A cache miss costs one extra request, so the failure mode is slowness
+rather than breakage.
 
 **2. Send.**
 
@@ -74,30 +74,29 @@ part second, because mail clients render the last part they understand.
 
 Two encoding hazards, both silent if missed:
 
-- **Headers must be ASCII.** A subject carrying anything else — a player's
-  name, a punctuation mark pasted from a phone — must be RFC 2047 encoded
+- **Headers must be ASCII.** A subject carrying anything else — a player's name,
+  a punctuation mark pasted from a phone — must be RFC 2047 encoded
   (`=?UTF-8?B?<base64>?=`) or the header is mangled. The bodies are declared
-  `charset=UTF-8` and sent base64, which sidesteps the same problem for
-  content.
-- **`raw` is base64*url*,** not standard base64. `+` and `/` must become `-`
-  and `_`. Standard base64 fails with an unhelpful parse error.
+  `charset=UTF-8` and sent base64, which sidesteps the same problem for content.
+- **`raw` is base64_url_,** not standard base64. `+` and `/` must become `-` and
+  `_`. Standard base64 fails with an unhelpful parse error.
 
 ### Configuration
 
-| Before | After |
-|---|---|
-| `RESEND_API_KEY` | `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` |
-| `EMAIL_FROM` default `Smash Club <onboarding@resend.dev>` | `EMAIL_FROM` required, no default |
+| Before                                                    | After                                                           |
+| --------------------------------------------------------- | --------------------------------------------------------------- |
+| `RESEND_API_KEY`                                          | `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` |
+| `EMAIL_FROM` default `Smash Club <onboarding@resend.dev>` | `EMAIL_FROM` required, no default                               |
 
 `EMAIL_FROM` keeps the `Name <addr@host>` format and is written straight into
 the `From:` header. A bare address with no angle brackets takes the name
 `Smash Club`.
 
 It must name the account that authorised the refresh token. Gmail silently
-rewrites a `From:` it does not recognise as an alias of that account, so a
-wrong value here does not fail — it sends under the real address instead. That
-is worth stating because it is the one misconfiguration in this part with no
-error message attached.
+rewrites a `From:` it does not recognise as an alias of that account, so a wrong
+value here does not fail — it sends under the real address instead. That is
+worth stating because it is the one misconfiguration in this part with no error
+message attached.
 
 The default is removed rather than replaced. Any default would be an address
 Gmail would rewrite, which is a silent wrong answer where an unset variable can
@@ -124,10 +123,10 @@ the fix is in the Google Cloud console rather than in the code.
 ### Tests
 
 `lib/email_test.ts` — assertions naming the provider, the endpoint, and the
-request shape are replaced. New cases cover what this transport adds and the
-old one did not have: base64url encoding with no `+` or `/`, a non-ASCII
-subject surviving as an encoded header, the text part preceding the HTML part,
-and `invalid_grant` reading as a configuration error.
+request shape are replaced. New cases cover what this transport adds and the old
+one did not have: base64url encoding with no `+` or `/`, a non-ASCII subject
+surviving as an encoded header, the text part preceding the HTML part, and
+`invalid_grant` reading as a configuration error.
 
 Message-content tests for `magicLinkEmail` and `reminderEmail` are unchanged
 because neither function changes.
@@ -143,13 +142,13 @@ This is the part that is genuinely more work than an API key. It is done once.
 4. OAuth consent screen → External → add `smashclub.dxb@gmail.com` as a test
    user → scope `https://www.googleapis.com/auth/gmail.send` only. That scope
    sends and cannot read, which is the whole point of choosing it
-5. **Publishing status → In production.** Not optional. A consent screen left
-   in Testing expires its refresh tokens after **seven days**, and mail stops
-   with no warning and no error until something sends. Google may show an
+5. **Publishing status → In production.** Not optional. A consent screen left in
+   Testing expires its refresh tokens after **seven days**, and mail stops with
+   no warning and no error until something sends. Google may show an
    unverified-app warning during consent, which is expected and can be clicked
    through for an account authorising its own project
-6. Credentials → OAuth client ID → **Desktop app**. This gives a client that
-   can complete the flow against `http://localhost` without hosting anything
+6. Credentials → OAuth client ID → **Desktop app**. This gives a client that can
+   complete the flow against `http://localhost` without hosting anything
 7. Run the consent flow once, granting from `smashclub.dxb@gmail.com`, and keep
    the `refresh_token` from the response. Request `access_type=offline` and
    `prompt=consent`, or Google returns an access token with no refresh token —
@@ -168,8 +167,8 @@ repository, and not in a `.env` file that could be committed.
 
 Consumer Gmail allows roughly 500 recipients a day. Sign-in codes and game
 reminders for a club of this size are far below that, but a reminder fan-out to
-every member of every game counts against it, and it is the ceiling to
-remember if the club grows or if reminders ever go daily.
+every member of every game counts against it, and it is the ceiling to remember
+if the club grows or if reminders ever go daily.
 
 Step 3 is the whole migration. No code changes.
 
@@ -177,15 +176,13 @@ Step 3 is the whole migration. No code changes.
 
 ### Why
 
-A code is currently minted per game and expires in five to ten minutes. A
-player attending two games sees two codes; a player whose page is stale sees a
-dead one. The wanted behaviour is one code per player, used everywhere,
-forever.
+A code is currently minted per game and expires in five to ten minutes. A player
+attending two games sees two codes; a player whose page is stale sees a dead
+one. The wanted behaviour is one code per player, used everywhere, forever.
 
 ### Token
 
-Today: `gameId.userId.window.mac`
-New: `userId.version.mac`
+Today: `gameId.userId.window.mac` New: `userId.version.mac`
 
 The MAC signs `checkin:v2:${userId}:${version}`. The `v2` prefix is inside the
 signed string so no Phase 5 token can verify under the new rules.
@@ -226,8 +223,8 @@ in order:
 1. `requireOrganizer(auth, game.groupId)` — unchanged, and still the primary
    access control. The POST comes from the organizer's browser, so a player
    replaying their own code cannot mark themselves.
-2. `verifyCheckinToken(token)` — a forged code is rejected. It proves the
-   server minted this code for this player at this version, and nothing more.
+2. `verifyCheckinToken(token)` — a forged code is rejected. It proves the server
+   minted this code for this player at this version, and nothing more.
 3. **New:** load the user and reject unless `claim.version` equals
    `checkinVersionOf(player)`. Verification alone cannot do this — the token is
    self-describing, so a superseded code still verifies as its own old version.
@@ -246,11 +243,10 @@ Gate 3 is what makes "replace my code" mean anything.
 
 A permanent code is worth screenshotting and players will screenshot it.
 
-With gate 4 in place, a leaked code only helps someone already confirmed on
-that game's roster — it lets a no-show be marked present by a friend at the
-door. Nothing short of expiry closes that, and expiry is what this phase
-deliberately removes. Version bump is the remedy for a code known to have
-leaked.
+With gate 4 in place, a leaked code only helps someone already confirmed on that
+game's roster — it lets a no-show be marked present by a friend at the door.
+Nothing short of expiry closes that, and expiry is what this phase deliberately
+removes. Version bump is the remedy for a code known to have leaked.
 
 Dropping the club from the token has one further cost: any organizer scanning
 any code resolves it to a `userId`, including for a player outside their club.

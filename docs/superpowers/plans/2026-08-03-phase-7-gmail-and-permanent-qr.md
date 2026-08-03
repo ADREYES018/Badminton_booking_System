@@ -1,25 +1,48 @@
 # Phase 7: Gmail API Email and Permanent QR Implementation Plan
 
-> **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
+> **For agentic workers:** REQUIRED SUB-SKILL: Use
+> superpowers:subagent-driven-development (recommended) or
+> superpowers:executing-plans to implement this plan task-by-task. Steps use
+> checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let real players sign in (the Gmail API replaces Resend) and carry one permanent check-in QR code instead of one short-lived code per game.
+**Goal:** Let real players sign in (the Gmail API replaces Resend) and carry one
+permanent check-in QR code instead of one short-lived code per game.
 
-**Architecture:** Two independent changes. The email swap stays entirely inside `lib/email.ts`, which already hides the provider from every caller. It sends as `smashclub.dxb@gmail.com` through Google's own servers, so DKIM aligns with the `From:` domain and sign-in codes reach Gmail inboxes rather than spam. The QR change replaces a token carrying `gameId.userId.window.mac` with one carrying `userId.version.mac` — no game, no expiry — and moves the per-game check from the token into a confirmed-roster lookup in the scanner's route handler.
+**Architecture:** Two independent changes. The email swap stays entirely inside
+`lib/email.ts`, which already hides the provider from every caller. It sends as
+`smashclub.dxb@gmail.com` through Google's own servers, so DKIM aligns with the
+`From:` domain and sign-in codes reach Gmail inboxes rather than spam. The QR
+change replaces a token carrying `gameId.userId.window.mac` with one carrying
+`userId.version.mac` — no game, no expiry — and moves the per-game check from
+the token into a confirmed-roster lookup in the scanner's route handler.
 
 **Tech Stack:** Deno, Fresh 2, Preact, Deno KV, `@std/assert` for tests.
 
-**Spec:** `docs/superpowers/specs/2026-08-03-phase-7-gmail-and-permanent-qr-design.md`
+**Spec:**
+`docs/superpowers/specs/2026-08-03-phase-7-gmail-and-permanent-qr-design.md`
 
 ## Global Constraints
 
-- Deno + Fresh 2. Tests run with `deno task test`; lint, format and typecheck run with `deno task check`. Both must pass before any commit.
-- Tests never hit the network. `lib/email.ts` logs to the console when `GMAIL_REFRESH_TOKEN` is unset, and that path must survive this change. Every function that would make a request is either not called by the tests or tested through a stubbed `fetch`.
-- Comments explain *why*, not *what*. Match the density and voice of the surrounding files — the existing headers in `lib/domain/checkin.ts` and `lib/email.ts` are the reference.
-- The check-in MAC keeps `MAC_LENGTH = 16` hex characters and reuses `hmacHex` / `timingSafeEqual` from `lib/crypto.ts`.
-- The signed string for a check-in token is exactly `checkin:v2:${userId}:${version}`. The `v2` lives inside the signed bytes.
-- No new dependencies. Google is called with `fetch`, not with `googleapis` or any other SDK. `@std/encoding/base64url` is already available and is used rather than hand-rolling the alphabet swap.
+- Deno + Fresh 2. Tests run with `deno task test`; lint, format and typecheck
+  run with `deno task check`. Both must pass before any commit.
+- Tests never hit the network. `lib/email.ts` logs to the console when
+  `GMAIL_REFRESH_TOKEN` is unset, and that path must survive this change. Every
+  function that would make a request is either not called by the tests or tested
+  through a stubbed `fetch`.
+- Comments explain _why_, not _what_. Match the density and voice of the
+  surrounding files — the existing headers in `lib/domain/checkin.ts` and
+  `lib/email.ts` are the reference.
+- The check-in MAC keeps `MAC_LENGTH = 16` hex characters and reuses `hmacHex` /
+  `timingSafeEqual` from `lib/crypto.ts`.
+- The signed string for a check-in token is exactly
+  `checkin:v2:${userId}:${version}`. The `v2` lives inside the signed bytes.
+- No new dependencies. Google is called with `fetch`, not with `googleapis` or
+  any other SDK. `@std/encoding/base64url` is already available and is used
+  rather than hand-rolling the alphabet swap.
 - `EMAIL_FROM` has no default. Unset is an error at send time.
-- Nothing logs the refresh token, the client secret, or an access token. `EmailError` carries response bodies, so a message that would echo a credential is trimmed before it is thrown.
+- Nothing logs the refresh token, the client secret, or an access token.
+  `EmailError` carries response bodies, so a message that would echo a
+  credential is trimmed before it is thrown.
 
 ---
 ### Task 1: The Gmail API replaces Resend in the mail transport
@@ -474,42 +497,47 @@ Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 EOF
 )"
 ```
-
 ---
 
 ### Task 2: The check-in token drops its game and its expiry
 
 **Files:**
+
 - Modify: `lib/domain/checkin.ts` — whole file
 - Modify: `lib/types.ts:36-54` (the `User` interface)
 - Test: `lib/domain/checkin_test.ts` — rewritten
 
 **Interfaces:**
+
 - Consumes: `hmacHex`, `timingSafeEqual` from `lib/crypto.ts` — unchanged.
 - Produces:
   - `mintCheckinToken(userId: string, version?: number): Promise<string>`
-  - `verifyCheckinToken(token: string): Promise<CheckinClaim>` where `CheckinClaim` is `{userId: string, version: number}`
+  - `verifyCheckinToken(token: string): Promise<CheckinClaim>` where
+    `CheckinClaim` is `{userId: string, version: number}`
   - `checkinVersionOf(user: User): number`
   - `CheckinError` — unchanged class
-  - `CHECKIN_WINDOW_SECONDS` and `windowAt` are **deleted**. Nothing outside this file used them; Step 5 verifies that.
+  - `CHECKIN_WINDOW_SECONDS` and `windowAt` are **deleted**. Nothing outside
+    this file used them; Step 5 verifies that.
 
-Task 3 consumes `verifyCheckinToken` and `checkinVersionOf`. Task 4 consumes `mintCheckinToken` and `checkinVersionOf`.
+Task 3 consumes `verifyCheckinToken` and `checkinVersionOf`. Task 4 consumes
+`mintCheckinToken` and `checkinVersionOf`.
 
 - [ ] **Step 1: Add the version field to the user record**
 
 In `lib/types.ts`, inside `interface User`, after the `role` line:
 
 ```ts
-  /**
-   * Bumped to retire a leaked check-in code. Absent means 1, so no existing
-   * record needs migrating.
-   */
-  checkinVersion?: number;
+/**
+ * Bumped to retire a leaked check-in code. Absent means 1, so no existing
+ * record needs migrating.
+ */
+checkinVersion?: number;
 ```
 
 - [ ] **Step 2: Write the failing tests**
 
-Replace the whole body of `lib/domain/checkin_test.ts` below its imports. Keep the `APP_SECRET` line and the dynamic import — both are load-order sensitive.
+Replace the whole body of `lib/domain/checkin_test.ts` below its imports. Keep
+the `APP_SECRET` line and the dynamic import — both are load-order sensitive.
 
 ```ts
 /**
@@ -611,8 +639,9 @@ Deno.test("a user record without the field reads as version 1", () => {
 
 - [ ] **Step 3: Run the tests and watch them fail**
 
-Run: `deno task test lib/domain/checkin_test.ts`
-Expected: FAIL — `checkinVersionOf` is not exported, and `mintCheckinToken` still takes a game id first.
+Run: `deno task test lib/domain/checkin_test.ts` Expected: FAIL —
+`checkinVersionOf` is not exported, and `mintCheckinToken` still takes a game id
+first.
 
 - [ ] **Step 4: Rewrite the token**
 
@@ -719,17 +748,20 @@ export async function verifyCheckinToken(
 
 - [ ] **Step 5: Run the tests and watch them pass**
 
-Run: `deno task test lib/domain/checkin_test.ts`
-Expected: PASS, nine cases.
+Run: `deno task test lib/domain/checkin_test.ts` Expected: PASS, nine cases.
 
 Then confirm the deleted exports had no other callers:
 
-Run: `grep -rn "windowAt\|CHECKIN_WINDOW_SECONDS" --include="*.ts" --include="*.tsx" . | grep -v node_modules`
+Run:
+`grep -rn "windowAt\|CHECKIN_WINDOW_SECONDS" --include="*.ts" --include="*.tsx" . | grep -v node_modules`
 Expected: no output. Any hit must be resolved before committing.
 
 - [ ] **Step 6: Commit**
 
-`deno task check` will report type errors in `routes/checkin.tsx` and `routes/game_actions.tsx` — both still call the old signature and are fixed in Tasks 3 and 4. Commit the unit-tested core now and let those tasks restore the build.
+`deno task check` will report type errors in `routes/checkin.tsx` and
+`routes/game_actions.tsx` — both still call the old signature and are fixed in
+Tasks 3 and 4. Commit the unit-tested core now and let those tasks restore the
+build.
 
 ```bash
 git add lib/domain/checkin.ts lib/domain/checkin_test.ts lib/types.ts
@@ -757,22 +789,40 @@ EOF
 ### Task 3: The roster check replaces expiry at the scanner
 
 **Files:**
-- Modify: `routes/game_actions.tsx:202-245` (the `POST /games/:slug/checkin` handler) and its imports at `:29`
+
+- Modify: `routes/game_actions.tsx:202-245` (the `POST /games/:slug/checkin`
+  handler) and its imports at `:29`
 - Test: `routes/checkin_test.ts`
 
 **Interfaces:**
-- Consumes: `verifyCheckinToken`, `checkinVersionOf`, `CheckinError` from Task 2. `getSignup(kv, gameId, userId): Promise<Signup | null>` and `getUser(kv, userId): Promise<User | null>`, both already imported in this file or in easy reach.
-- Produces: no new exports. The route's JSON contract is unchanged: `200 {ok: true, userId, name}` or `400 {ok: false, error}`. `islands/CheckinScanner.tsx` needs no change.
+
+- Consumes: `verifyCheckinToken`, `checkinVersionOf`, `CheckinError` from
+  Task 2. `getSignup(kv, gameId, userId): Promise<Signup | null>` and
+  `getUser(kv, userId): Promise<User | null>`, both already imported in this
+  file or in easy reach.
+- Produces: no new exports. The route's JSON contract is unchanged:
+  `200 {ok: true, userId, name}` or `400 {ok: false, error}`.
+  `islands/CheckinScanner.tsx` needs no change.
 
 - [ ] **Step 1: Write the failing tests**
 
-Work inside `routes/checkin_test.ts`, which already has the helpers this needs — `gameWithPlayer()`, `signIn(user)`, and `post(path, auth, fields)`. Use them; do not hand-roll `new Request`. Note `gameWithPlayer` returns `player` as a `User` object, not an id.
+Work inside `routes/checkin_test.ts`, which already has the helpers this needs —
+`gameWithPlayer()`, `signIn(user)`, and `post(path, auth, fields)`. Use them; do
+not hand-roll `new Request`. Note `gameWithPlayer` returns `player` as a `User`
+object, not an id.
 
 First, three edits to what is already there:
 
-1. Every call site becomes `mintCheckinToken(player.id)` — the game argument is gone. There are five.
-2. **Delete** `"a code minted for another game is refused"`. The token no longer carries a game, so the behaviour it tests cannot exist. Its replacement is the roster test below, which is the same protection relocated.
-3. `"a code for someone not on the roster is refused"` already exists and already covers the roster gate. Keep it as-is rather than adding a second one — after step 1 above it exercises the new token against the new gate, which is exactly the case. Only its comment needs updating, to say the roster is now the sole thing refusing this:
+1. Every call site becomes `mintCheckinToken(player.id)` — the game argument is
+   gone. There are five.
+2. **Delete** `"a code minted for another game is refused"`. The token no longer
+   carries a game, so the behaviour it tests cannot exist. Its replacement is
+   the roster test below, which is the same protection relocated.
+3. `"a code for someone not on the roster is refused"` already exists and
+   already covers the roster gate. Keep it as-is rather than adding a second one
+   — after step 1 above it exercises the new token against the new gate, which
+   is exactly the case. Only its comment needs updating, to say the roster is
+   now the sole thing refusing this:
 
 ```ts
 Deno.test("a code for someone not on the roster is refused", async () => {
@@ -787,7 +837,8 @@ Then add `getUser` and `updateUser` to the dynamic imports at the top:
 const { getUser, updateUser } = await import("../lib/data/users.ts");
 ```
 
-Then add two new cases. Attendance is read through `attendedAt`, the way every existing test in this file reads it — there is no `attended` field on a signup.
+Then add two new cases. Attendance is read through `attendedAt`, the way every
+existing test in this file reads it — there is no `attended` field on a signup.
 
 ```ts
 Deno.test("a code carrying no game still marks a confirmed player present", async () => {
@@ -831,52 +882,58 @@ Deno.test("a superseded code is refused after the player replaces it", async () 
 
 - [ ] **Step 2: Run the tests and watch them fail**
 
-Run: `deno task test routes/checkin_test.ts`
-Expected: FAIL — `updateUser` rejects `checkinVersion` (added in Step 3) and the handler still passes a game id to `verifyCheckinToken`.
+Run: `deno task test routes/checkin_test.ts` Expected: FAIL — `updateUser`
+rejects `checkinVersion` (added in Step 3) and the handler still passes a game
+id to `verifyCheckinToken`.
 
 - [ ] **Step 3: Let `updateUser` carry the version**
 
 In `lib/data/users.ts`, add to `interface ProfileUpdate`:
 
 ```ts
-  checkinVersion?: number;
+checkinVersion?: number;
 ```
 
 and inside `updateUser`, alongside the other field assignments:
 
 ```ts
-    if (update.checkinVersion !== undefined) {
-      next.checkinVersion = update.checkinVersion;
-    }
+if (update.checkinVersion !== undefined) {
+  next.checkinVersion = update.checkinVersion;
+}
 ```
 
 - [ ] **Step 4: Rewrite the handler**
 
-In `routes/game_actions.tsx`, replace the doc comment above the handler and the body of the `try` block.
+In `routes/game_actions.tsx`, replace the doc comment above the handler and the
+body of the `try` block.
 
-Two deliberate changes to what is there now. `getUser` moves from after `setAttendance` to before it, because the version check needs the record. And the `player?.name ?? "Player"` fallback goes: a code that verifies against a user id with no record means the account was deleted, which is a refusal rather than an anonymous check-in.
+Two deliberate changes to what is there now. `getUser` moves from after
+`setAttendance` to before it, because the version check needs the record. And
+the `player?.name ?? "Player"` fallback goes: a code that verifies against a
+user id with no record means the account was deleted, which is a refusal rather
+than an anonymous check-in.
 
 ```tsx
-  /**
-   * Scanning a code.
-   *
-   * Four gates, in order: the scanner must be an organizer of this game's
-   * club, the code must verify, its version must still be the player's
-   * current one, and the player must be confirmed on this game's roster.
-   *
-   * The last is load-bearing. The code carries no game and never expires, so
-   * without a roster check a code scanned anywhere would mark its owner
-   * present anywhere.
-   *
-   * The version gate cannot live in verification: a superseded code still
-   * verifies as its own old version, and only the stored record knows which
-   * version is current.
-   *
-   * The organizer guard is what makes the direction of the scan safe — the
-   * POST comes from the organizer's browser carrying a token the player
-   * displayed, so a player replaying their own token still cannot mark
-   * themselves.
-   */
+/**
+ * Scanning a code.
+ *
+ * Four gates, in order: the scanner must be an organizer of this game's
+ * club, the code must verify, its version must still be the player's
+ * current one, and the player must be confirmed on this game's roster.
+ *
+ * The last is load-bearing. The code carries no game and never expires, so
+ * without a roster check a code scanned anywhere would mark its owner
+ * present anywhere.
+ *
+ * The version gate cannot live in verification: a superseded code still
+ * verifies as its own old version, and only the stored record knows which
+ * version is current.
+ *
+ * The organizer guard is what makes the direction of the scan safe — the
+ * POST comes from the organizer's browser carrying a token the player
+ * displayed, so a player replaying their own token still cannot mark
+ * themselves.
+ */
 ```
 
 ```tsx
@@ -923,7 +980,8 @@ Two deliberate changes to what is there now. `getUser` moves from after `setAtte
     } catch (error) {
 ```
 
-Update the import at `:29` and make sure `getSignup` and `getUser` are imported in this file:
+Update the import at `:29` and make sure `getSignup` and `getUser` are imported
+in this file:
 
 ```tsx
 import {
@@ -933,16 +991,18 @@ import {
 } from "../lib/domain/checkin.ts";
 ```
 
-If `getSignup` is not already imported from `../lib/data/signups.ts`, add it to that import. `getUser` is already imported for the reply.
+If `getSignup` is not already imported from `../lib/data/signups.ts`, add it to
+that import. `getUser` is already imported for the reply.
 
 - [ ] **Step 5: Run the tests and watch them pass**
 
-Run: `deno task test routes/checkin_test.ts`
-Expected: PASS, including the pre-existing organizer-guard tests.
+Run: `deno task test routes/checkin_test.ts` Expected: PASS, including the
+pre-existing organizer-guard tests.
 
 - [ ] **Step 6: Commit**
 
-`deno task check` still reports an error in `routes/checkin.tsx`, fixed in Task 4.
+`deno task check` still reports an error in `routes/checkin.tsx`, fixed in
+Task 4.
 
 ```bash
 git add routes/game_actions.tsx routes/checkin_test.ts lib/data/users.ts
@@ -967,20 +1027,26 @@ EOF
 ### Task 4: One code on the page, and a way to replace it
 
 **Files:**
-- Modify: `routes/checkin.tsx` (player branch, roughly `:133-170` and `:243-260`)
+
+- Modify: `routes/checkin.tsx` (player branch, roughly `:133-170` and
+  `:243-260`)
 - Modify: `components/CheckinCode.tsx`
 - Modify: `routes/profile.tsx` (form section and the `POST /profile` handler)
 - Test: `routes/checkin_test.ts`
 
 **Interfaces:**
-- Consumes: `mintCheckinToken(userId, version)` and `checkinVersionOf(user)` from Task 2. `updateUser(kv, userId, {checkinVersion})` from Task 3.
+
+- Consumes: `mintCheckinToken(userId, version)` and `checkinVersionOf(user)`
+  from Task 2. `updateUser(kv, userId, {checkinVersion})` from Task 3.
 - Produces: no new exports.
 
 - [ ] **Step 1: Write the failing test**
 
 Add to `routes/checkin_test.ts`:
 
-`seedGame` returns `{game, organizer, groupId}` and no slug, so the page test resolves the group through `getGroup`. It also mints its own organizer per call, which is why the second game is seeded separately and the player joins both.
+`seedGame` returns `{game, organizer, groupId}` and no slug, so the page test
+resolves the group through `getGroup`. It also mints its own organizer per call,
+which is why the second game is seeded separately and the player joins both.
 
 ```ts
 Deno.test("the check-in page shows one code however many games are open", async () => {
@@ -1016,12 +1082,14 @@ Deno.test("replacing a code retires the previous one", async () => {
 });
 ```
 
-Add `checkinVersionOf` to the dynamic import of `../lib/domain/checkin.ts`, and add `const { getGroup } = await import("../lib/data/groups.ts");` alongside the other dynamic imports.
+Add `checkinVersionOf` to the dynamic import of `../lib/domain/checkin.ts`, and
+add `const { getGroup } = await import("../lib/data/groups.ts");` alongside the
+other dynamic imports.
 
 - [ ] **Step 2: Run the tests and watch them fail**
 
-Run: `deno task test routes/checkin_test.ts`
-Expected: FAIL — the page renders one QR per game, and `/profile` ignores `replaceCheckinCode`.
+Run: `deno task test routes/checkin_test.ts` Expected: FAIL — the page renders
+one QR per game, and `/profile` ignores `replaceCheckinCode`.
 
 - [ ] **Step 3: Render one code on the check-in page**
 
@@ -1077,33 +1145,34 @@ function PlayerView(props: PlayerProps) {
 Replace the player branch of the route handler — the `codes` loop goes away:
 
 ```tsx
-    const games = (await listGamesByGroup(kv, group.id))
-      .filter(isOpenForCheckin)
-      .sort((a, b) => b.startUtc.localeCompare(a.startUtc));
+const games = (await listGamesByGroup(kv, group.id))
+  .filter(isOpenForCheckin)
+  .sort((a, b) => b.startUtc.localeCompare(a.startUtc));
 
-    // Only the games this player is actually on, so the list matches what the
-    // scanner will accept.
-    const mine: Game[] = [];
-    for (const game of games) {
-      const signup = await getSignup(kv, game.id, user.id);
-      if (signup?.status === "confirmed") mine.push(game);
-    }
+// Only the games this player is actually on, so the list matches what the
+// scanner will accept.
+const mine: Game[] = [];
+for (const game of games) {
+  const signup = await getSignup(kv, game.id, user.id);
+  if (signup?.status === "confirmed") mine.push(game);
+}
 
-    // One code, whatever is on the list. It does not depend on the games.
-    const token = await mintCheckinToken(user.id, checkinVersionOf(user));
+// One code, whatever is on the list. It does not depend on the games.
+const token = await mintCheckinToken(user.id, checkinVersionOf(user));
 
-    return await render(
-      <Page user={user} nav="checkin" groupSlug={group.slug}>
-        <PlayerView user={user} token={token} games={mine} />
-      </Page>,
-    );
+return await render(
+  <Page user={user} nav="checkin" groupSlug={group.slug}>
+    <PlayerView user={user} token={token} games={mine} />
+  </Page>,
+);
 ```
 
 Update the import to bring in `checkinVersionOf` alongside `mintCheckinToken`.
 
 - [ ] **Step 4: Correct the copy on the code itself**
 
-In `components/CheckinCode.tsx`, the header comment's claim about expiry is now false. Replace the second paragraph of the comment:
+In `components/CheckinCode.tsx`, the header comment's claim about expiry is now
+false. Replace the second paragraph of the comment:
 
 ```tsx
 /**
@@ -1123,72 +1192,120 @@ In `components/CheckinCode.tsx`, the header comment's claim about expiry is now 
 And the line under the heading:
 
 ```tsx
-        <p class="text-label-sm text-on-surface-variant text-center">
-          Show this at the door. It is the same code at every game.
-        </p>
+<p class="text-label-sm text-on-surface-variant text-center">
+  Show this at the door. It is the same code at every game.
+</p>;
 ```
 
 - [ ] **Step 5: Add the replace action to the profile page**
 
-In `routes/profile.tsx`, add a section to the rendered form — its own `<form>`, so it does not submit the profile fields:
+In `routes/profile.tsx`, add a section to the rendered form — its own `<form>`,
+so it does not submit the profile fields:
 
 ```tsx
-        <Card class="flex flex-col gap-3">
-          <h2 class="text-body-lg font-bold text-on-surface">
-            Check-in code
-          </h2>
-          <p class="text-body-md text-on-surface-variant">
-            Your QR code never expires, so anyone you have sent a screenshot to
-            still has a working copy. Replacing it kills the old one.
-          </p>
-          <form method="post" action="/profile">
-            <input type="hidden" name={CSRF_FIELD} value={props.csrf} />
-            <input type="hidden" name="replaceCheckinCode" value="1" />
-            <Button type="submit" variant="secondary">
-              Replace my check-in code
-            </Button>
-          </form>
-        </Card>
+<Card class="flex flex-col gap-3">
+  <h2 class="text-body-lg font-bold text-on-surface">
+    Check-in code
+  </h2>
+  <p class="text-body-md text-on-surface-variant">
+    Your QR code never expires, so anyone you have sent a screenshot to still
+    has a working copy. Replacing it kills the old one.
+  </p>
+  <form method="post" action="/profile">
+    <input type="hidden" name={CSRF_FIELD} value={props.csrf} />
+    <input type="hidden" name="replaceCheckinCode" value="1" />
+    <Button type="submit" variant="secondary">
+      Replace my check-in code
+    </Button>
+  </form>
+</Card>;
 ```
 
-In the `POST /profile` handler, immediately after the CSRF check and before the name validation — the rest of the handler validates profile fields this form does not carry:
+In the `POST /profile` handler, immediately after the CSRF check and before the
+name validation — the rest of the handler validates profile fields this form
+does not carry:
 
 ```tsx
-    if (form.get("replaceCheckinCode")) {
-      // The id comes from the session, never from the form: a player may only
-      // retire their own code.
-      const replaced = await updateUser(kv, user.id, {
-        checkinVersion: checkinVersionOf(user) + 1,
-      });
+if (form.get("replaceCheckinCode")) {
+  // The id comes from the session, never from the form: a player may only
+  // retire their own code.
+  const replaced = await updateUser(kv, user.id, {
+    checkinVersion: checkinVersionOf(user) + 1,
+  });
 
-      return await renderProfile(ctx, {
-        user: replaced,
-        csrf,
-        setup,
-        notice: "Your check-in code has been replaced.",
-      });
-    }
+  return await renderProfile(ctx, {
+    user: replaced,
+    csrf,
+    setup,
+    notice: "Your check-in code has been replaced.",
+  });
+}
 ```
 
-`ProfileViewProps` currently carries `saved?: boolean` and `error?: string` and no `notice`. Add `notice?: string` to it rather than reusing `saved`, whose `<Alert tone="success">Profile saved.</Alert>` would be a lie here — nothing about the profile was saved. Render it beside the existing alerts at `routes/profile.tsx:92`:
+`ProfileViewProps` currently carries `saved?: boolean` and `error?: string` and
+no `notice`. Add `notice?: string` to it rather than reusing `saved`, whose
+`<Alert tone="success">Profile saved.</Alert>` would be a lie here — nothing
+about the profile was saved. Render it beside the existing alerts at
+`routes/profile.tsx:92`:
 
 ```tsx
-        {props.notice && <Alert tone="success">{props.notice}</Alert>}
+{
+  props.notice && <Alert tone="success">{props.notice}</Alert>;
+}
 ```
 
-`Alert` is already imported. Import `checkinVersionOf` from `../lib/domain/checkin.ts`.
+`Alert` is already imported. Import `checkinVersionOf` from
+`../lib/domain/checkin.ts`.
 
 - [ ] **Step 6: Run the tests and watch them pass**
 
-Run: `deno task test routes/checkin_test.ts`
-Expected: PASS.
+Run: `deno task test routes/checkin_test.ts` Expected: PASS.
+
+- [ ] **Step 6b: The last two old-signature callers**
+
+Task 2 found these after the original file list was written. Both still pass a
+game id.
+
+In `routes/game.tsx:552`, the call is guarded by a cutoff check whose reasoning
+no longer holds — the comment above it says the code "expires within ten
+minutes", which stopped being true in Task 2. A permanent code hidden until the
+cutoff is a code a player cannot save in advance, which is the opposite of the
+point. Show it to anyone confirmed on a game that is not cancelled:
+
+```tsx
+// The player's permanent code, shown to anyone holding a seat. It is the
+// same code everywhere, so there is nothing to withhold until the cutoff.
+const checkinToken = signup?.status === "confirmed" &&
+    game.status !== "cancelled"
+  ? await mintCheckinToken(user.id, checkinVersionOf(user))
+  : undefined;
+```
+
+Add `checkinVersionOf` to the import at `routes/game.tsx:41`. Check whether
+`isPastCutoff` is still used elsewhere in the file — if this was its only use,
+remove it from the import too, or `deno task check` fails on an unused symbol.
+
+In `tools/seed_demo.ts:178`:
+
+```ts
+checkinToken: await mintCheckinToken(roster[0]!.id),
+```
+
+`checkinVersionOf` is not needed there — a freshly seeded user has no version,
+and the default of 1 is what the page would mint anyway.
 
 - [ ] **Step 7: Run everything**
 
 ```bash
 deno task check && deno task test
 ```
-Expected: clean, and the full suite green — this is the first task at which the build compiles end to end.
+
+Expected: clean, and the full suite green — this is the first task at which the
+build compiles end to end.
+
+If `deno task check` fails at the `fmt` step on untracked markdown in `docs/` or
+`.claude/`, that is pre-existing and not from this phase. Run `deno fmt` on
+those files so the typecheck is actually reached.
 
 - [ ] **Step 8: Commit**
 
@@ -1214,7 +1331,8 @@ EOF
 
 ### Task 5: Verify against a running app
 
-Automated tests here are HTTP-level. Phase 6 shipped a visually broken app past a green suite, so this task is manual and is not optional.
+Automated tests here are HTTP-level. Phase 6 shipped a visually broken app past
+a green suite, so this task is manual and is not optional.
 
 - [ ] **Step 1: Build and serve**
 
@@ -1224,36 +1342,57 @@ deno task serve:demo
 
 - [ ] **Step 2: Check the player's code**
 
-Sign in as a seeded player, open `/checkin`. Confirm: exactly one QR, the copy says it is the same code at every game, and the games listed are ones the player is confirmed on.
+Sign in as a seeded player, open `/checkin`. Confirm: exactly one QR, the copy
+says it is the same code at every game, and the games listed are ones the player
+is confirmed on.
 
 - [ ] **Step 3: Confirm the code is stable**
 
-Reload the page. The text token underneath must be identical. Reloading is what proved the old code was ephemeral; here it proves the opposite.
+Reload the page. The text token underneath must be identical. Reloading is what
+proved the old code was ephemeral; here it proves the opposite.
 
 - [ ] **Step 4: Scan it**
 
-On a phone, sign in as the organizer, open `/checkin`, and scan the player's code from the other screen. Expect the player's name and their row flipping to present. This needs a real camera — `BarcodeDetector` has no test double.
+On a phone, sign in as the organizer, open `/checkin`, and scan the player's
+code from the other screen. Expect the player's name and their row flipping to
+present. This needs a real camera — `BarcodeDetector` has no test double.
 
 - [ ] **Step 5: Check the roster refusal**
 
-Scan the code of a player not signed up for that game. Expect "… is not on the roster for this game."
+Scan the code of a player not signed up for that game. Expect "… is not on the
+roster for this game."
 
 - [ ] **Step 6: Replace and re-scan**
 
-As the player, replace the code on `/profile`. Scan the *old* screenshot. Expect "That code has been replaced." Then scan the new one and expect success.
+As the player, replace the code on `/profile`. Scan the _old_ screenshot. Expect
+"That code has been replaced." Then scan the new one and expect success.
 
 - [ ] **Step 7: Send a real email**
 
-This is the step the Google Cloud setup in the spec is a prerequisite for. With `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` and `EMAIL_FROM` all set, request a sign-in code for an address that is not yours — a friend's phone.
+This is the step the Google Cloud setup in the spec is a prerequisite for. With
+`GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` and `EMAIL_FROM`
+all set, request a sign-in code for an address that is not yours — a friend's
+phone.
 
 Confirm four things, because each fails differently:
 
-1. The code arrives **in the inbox**. Check spam anyway: this is the claim the whole transport choice was made for, and it is the only place it can be tested.
-2. The `From:` reads `Smash Club <smashclub.dxb@gmail.com>`. If it shows a different address, `EMAIL_FROM` does not match the authorising account and Gmail rewrote it silently.
-3. Open the message's "Show original" in Gmail. `DKIM: PASS` with `domain=gmail.com` is the alignment that made this worth the OAuth setup. Anything else means mail is going out through a path this design did not intend.
-4. Send a second message a few minutes later. It exercises the cached access token rather than a fresh one, which is the path every message after the first takes.
+1. The code arrives **in the inbox**. Check spam anyway: this is the claim the
+   whole transport choice was made for, and it is the only place it can be
+   tested.
+2. The `From:` reads `Smash Club <smashclub.dxb@gmail.com>`. If it shows a
+   different address, `EMAIL_FROM` does not match the authorising account and
+   Gmail rewrote it silently.
+3. Open the message's "Show original" in Gmail. `DKIM: PASS` with
+   `domain=gmail.com` is the alignment that made this worth the OAuth setup.
+   Anything else means mail is going out through a path this design did not
+   intend.
+4. Send a second message a few minutes later. It exercises the cached access
+   token rather than a fresh one, which is the path every message after the
+   first takes.
 
-Then leave it a week and send one more. A refresh token issued against a consent screen still in Testing expires after seven days, and this is the only way that failure surfaces before players hit it.
+Then leave it a week and send one more. A refresh token issued against a consent
+screen still in Testing expires after seven days, and this is the only way that
+failure surfaces before players hit it.
 
 - [ ] **Step 8: Commit anything the walkthrough turned up**
 
@@ -1263,8 +1402,15 @@ No commit if nothing broke.
 
 ## Notes for whoever executes this
 
-**Tasks 2 and 3 leave the build red on purpose.** `deno task check` fails between them because `routes/checkin.tsx` still calls the old signature. Task 4 closes it. If you are running tasks out of order, run 2, 3, 4 as a block.
+**Tasks 2 and 3 leave the build red on purpose.** `deno task check` fails
+between them because `routes/checkin.tsx` still calls the old signature. Task 4
+closes it. If you are running tasks out of order, run 2, 3, 4 as a block.
 
-**The riskiest change is Task 3, Step 4.** Every gate in that handler is load-bearing now that the token carries neither a game nor an expiry. If a reviewer questions one, the answer is in the spec's "Residual risk" section rather than in the code.
+**The riskiest change is Task 3, Step 4.** Every gate in that handler is
+load-bearing now that the token carries neither a game nor an expiry. If a
+reviewer questions one, the answer is in the spec's "Residual risk" section
+rather than in the code.
 
-**Nothing in `islands/CheckinScanner.tsx` changes.** It posts what it decodes and shows what the server says. If a task tempts you to edit it, re-read the task.
+**Nothing in `islands/CheckinScanner.tsx` changes.** It posts what it decodes
+and shows what the server says. If a task tempts you to edit it, re-read the
+task.
