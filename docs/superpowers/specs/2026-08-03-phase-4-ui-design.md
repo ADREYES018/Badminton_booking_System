@@ -14,8 +14,8 @@ Four user-facing slices, plus one backend addition:
 3. An organizer marks who turned up.
 4. Everyone sees their own stats and the group leaderboard.
 
-Out of scope: QR check-in (Phase 5), group management (deferred in Phase 2),
-and any change to how joining a game works.
+Out of scope: QR check-in (Phase 5), group management (deferred in Phase 2), and
+any change to how joining a game works.
 
 ## Backend additions
 
@@ -25,34 +25,33 @@ Only two changes below the route layer.
 `["stats", groupId]` prefix and returns `PlayerStats[]`. `getStats` reads one
 player at a time, which cannot build a leaderboard.
 
-Sorting and the five-match qualifying filter stay in the route, not here.
-They are presentation rules: a different screen may want a different order, and
-a data function that silently drops rows is one that is hard to trust.
+Sorting and the five-match qualifying filter stay in the route, not here. They
+are presentation rules: a different screen may want a different order, and a
+data function that silently drops rows is one that is hard to trust.
 
-**Delete `keys.leaderboard`** from `lib/kv/keys.ts`. Nothing has ever written
-it and, with the leaderboard sorted in memory, nothing will. Maintaining it
-would mean deleting the old sort-key entry and writing a new one atomically on
-every stats change — real complexity, bought for a group of a few dozen
-players where a prefix scan and an in-memory sort are effectively free.
+**Delete `keys.leaderboard`** from `lib/kv/keys.ts`. Nothing has ever written it
+and, with the leaderboard sorted in memory, nothing will. Maintaining it would
+mean deleting the old sort-key entry and writing a new one atomically on every
+stats change — real complexity, bought for a group of a few dozen players where
+a prefix scan and an in-memory sort are effectively free.
 
 Everything else this phase needs already exists and is tested: `markPaid`,
-`confirmPaid`, `refundPayment`, `settlementFor`, `setAttendance`,
-`reportMatch`, `confirmMatch`, `rejectMatch`, `listMatchesForGame`,
-`getStats`.
+`confirmPaid`, `refundPayment`, `settlementFor`, `setAttendance`, `reportMatch`,
+`confirmMatch`, `rejectMatch`, `listMatchesForGame`, `getStats`.
 
 ## File layout
 
 `routes/game.tsx` is already 602 lines and this phase adds three more concerns
 to it. It splits:
 
-| File | Holds |
-| --- | --- |
-| `routes/game.tsx` | Game detail GET, RSVP POSTs. Exports `begin` and `act`. |
-| `routes/game_actions.tsx` | Payment, result and attendance POSTs. |
-| `components/PaymentPanel.tsx` | Payment state and action, presentational. |
-| `components/ResultsPanel.tsx` | Report form and match list, presentational. |
-| `routes/organizer/settlement.tsx` | Organizer settlement screen. |
-| `routes/stats.tsx` | Own stats and group leaderboard. |
+| File                              | Holds                                                   |
+| --------------------------------- | ------------------------------------------------------- |
+| `routes/game.tsx`                 | Game detail GET, RSVP POSTs. Exports `begin` and `act`. |
+| `routes/game_actions.tsx`         | Payment, result and attendance POSTs.                   |
+| `components/PaymentPanel.tsx`     | Payment state and action, presentational.               |
+| `components/ResultsPanel.tsx`     | Report form and match list, presentational.             |
+| `routes/organizer/settlement.tsx` | Organizer settlement screen.                            |
+| `routes/stats.tsx`                | Own stats and group leaderboard.                        |
 
 The two panel components take props and never touch KV, so their branching —
 which is where the rules show up — is unit-testable without a database.
@@ -91,13 +90,13 @@ or `free` pricing that is not a multiple of the per-head figure.
 
 One action, chosen by `signup.payment`:
 
-| State | What the player sees |
-| --- | --- |
-| `unpaid` | The amount, the payout IBAN, and an "I've paid" button. |
-| `marked_paid` | "Waiting for the organizer to confirm." No button. |
-| `paid` | A confirmed chip. No button. |
-| `refunded` | A refunded chip. No button. |
-| `forfeited` | The amount owed, no action — they left after the cutoff. |
+| State         | What the player sees                                     |
+| ------------- | -------------------------------------------------------- |
+| `unpaid`      | The amount, the payout IBAN, and an "I've paid" button.  |
+| `marked_paid` | "Waiting for the organizer to confirm." No button.       |
+| `paid`        | A confirmed chip. No button.                             |
+| `refunded`    | A refunded chip. No button.                              |
+| `forfeited`   | The amount owed, no action — they left after the cutoff. |
 
 `POST /games/:slug/paid` calls `markPaid`.
 
@@ -109,9 +108,8 @@ that must not be optimistic, since `marked_paid` counts as outstanding rather
 than collected.
 
 Below, the confirmed roster with each player's owed figure and payment state.
-Confirm-paid on any row not already `paid`; refund only on a row that is
-`paid`, matching `refundPayment`'s guard that only a confirmed payment can be
-refunded.
+Confirm-paid on any row not already `paid`; refund only on a row that is `paid`,
+matching `refundPayment`'s guard that only a confirmed payment can be refunded.
 
 `POST /games/:slug/payments/confirm` and `POST /games/:slug/payments/refund`,
 both organizer-guarded, both taking `userId`.
@@ -123,7 +121,8 @@ Renders on the game detail page below the roster, once the game has started.
 ### Reporting
 
 Confirmed players see a form: four selects populated from the confirmed roster
-(two for side A, two for side B) and two score fields. `POST
+(two for side A, two for side B) and two score fields.
+`POST
 /games/:slug/results` calls `reportMatch`.
 
 The form does not re-implement validation. `reportMatch` already rejects
@@ -153,10 +152,10 @@ both taking `matchId`.
 Organizer-only toggles on each confirmed roster row, rendered once the cutoff
 has passed.
 
-Three states are shown, because three states exist: present, absent, and not
-yet marked. The current state renders as active rather than hiding the other
-button, so a mis-mark can be corrected — which `setAttendance` supports, moving
-the count between columns rather than adding to both.
+Three states are shown, because three states exist: present, absent, and not yet
+marked. The current state renders as active rather than hiding the other button,
+so a mis-mark can be corrected — which `setAttendance` supports, moving the
+count between columns rather than adding to both.
 
 `POST /games/:slug/attendance` with `userId` and `attended`, passing the game's
 `groupId` so the group counters move.
@@ -167,16 +166,16 @@ the count between columns rather than adding to both.
 
 **Own card** from `getStats`: win rate, show-up rate, matches played.
 
-**Leaderboard** from `listStats`, filtered to `wins + losses >= 5` and sorted
-by win rate descending. The five-match minimum is a locked decision.
+**Leaderboard** from `listStats`, filtered to `wins + losses >= 5` and sorted by
+win rate descending. The five-match minimum is a locked decision.
 
 Players below the threshold are listed separately as "still qualifying" rather
 than dropped. A player who cannot find themselves on a leaderboard, with no
 explanation, reasonably reads that as a bug.
 
-Show-up rate is `attended / (attended + noShow)`, and is undefined when both
-are zero. It renders as "—", never as 0% — an unmarked player has not failed to
-turn up.
+Show-up rate is `attended / (attended + noShow)`, and is undefined when both are
+zero. It renders as "—", never as 0% — an unmarked player has not failed to turn
+up.
 
 ## Testing
 

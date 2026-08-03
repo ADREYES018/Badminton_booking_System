@@ -363,6 +363,26 @@ export async function getStats(
   return entry.value ?? emptyStats(groupId, userId);
 }
 
+/**
+ * Every player's record in one group, unsorted.
+ *
+ * Ordering and the qualifying threshold stay with the caller. They are
+ * presentation rules — a different screen may want a different order — and a
+ * data function that silently drops rows is one that is hard to trust.
+ */
+export async function listStats(
+  kv: Deno.Kv,
+  groupId: string,
+  limit = 500,
+): Promise<PlayerStats[]> {
+  const entries = await listRecords<PlayerStats>(
+    kv,
+    { prefix: keys.statsByGroupPrefix(groupId) },
+    { limit },
+  );
+  return entries.map((entry) => entry.value);
+}
+
 /** Every match reported for a game, newest first. */
 export async function listMatchesForGame(
   kv: Deno.Kv,

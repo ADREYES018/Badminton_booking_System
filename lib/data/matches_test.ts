@@ -11,6 +11,7 @@ import {
   confirmMatch,
   getStats,
   listMatchesForGame,
+  listStats,
   rejectMatch,
   reportMatch,
   setAttendance,
@@ -307,6 +308,57 @@ Deno.test("the side with the higher score wins regardless of which it is", async
 
     assertEquals((await getStats(kv, groupId, c!.id)).wins, 1);
     assertEquals((await getStats(kv, groupId, a!.id)).losses, 1);
+  });
+});
+
+Deno.test("a group's stats list everyone who has a record in it", async () => {
+  await withTestKv(async (kv) => {
+    const { game, groupId, players } = await gameOfFour(kv);
+    const [a, b, c, d] = players;
+
+    // Nobody has played yet, so nobody has a record to list. A player with no
+    // stats is absent from the scan rather than present with zeroes.
+    assertEquals((await listStats(kv, groupId)).length, 0);
+
+    const match = await reportMatch(kv, {
+      gameId: game.id,
+      groupId,
+      sideA: [a!.id, b!.id],
+      sideB: [c!.id, d!.id],
+      scoreA: 21,
+      scoreB: 15,
+      reportedBy: a!.id,
+    });
+    await confirmMatch(kv, match.id, c!.id);
+
+    const stats = await listStats(kv, groupId);
+    assertEquals(stats.length, 4);
+    assertEquals(
+      stats.map((s) => s.wins + s.losses).reduce((sum, n) => sum + n, 0),
+      4,
+    );
+  });
+});
+
+Deno.test("stats from one group never appear in another's list", async () => {
+  await withTestKv(async (kv) => {
+    const { game, groupId, players } = await gameOfFour(kv);
+    const [a, b, c, d] = players;
+
+    const match = await reportMatch(kv, {
+      gameId: game.id,
+      groupId,
+      sideA: [a!.id, b!.id],
+      sideB: [c!.id, d!.id],
+      scoreA: 21,
+      scoreB: 15,
+      reportedBy: a!.id,
+    });
+    await confirmMatch(kv, match.id, c!.id);
+
+    // The prefix is ["stats", groupId]. A neighbouring group whose id shares a
+    // leading substring must not be swept up by it.
+    assertEquals((await listStats(kv, `${groupId}-other`)).length, 0);
   });
 });
 

@@ -96,8 +96,15 @@ export const keys = {
   matchesByGamePrefix: (gameId: string) => ["matches_by_game", gameId] as const,
   stats: (groupId: string, userId: string) =>
     ["stats", groupId, userId] as const,
-  leaderboard: (groupId: string, sortKey: string, userId: string) =>
-    ["leaderboard", groupId, sortKey, userId] as const,
+  /**
+   * Every player's record in one group.
+   *
+   * The leaderboard scans this and sorts in memory rather than maintaining a
+   * sorted index. A club is tens of players, and an index would have to delete
+   * its old sort-key entry and write a new one atomically on every stats
+   * change — real complexity, bought for nothing at this size.
+   */
+  statsByGroupPrefix: (groupId: string) => ["stats", groupId] as const,
 
   // ---- Audit --------------------------------------------------------------
   /** Scoped by group so an organizer's reads can never span groups. */
