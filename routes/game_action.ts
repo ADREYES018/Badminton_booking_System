@@ -34,6 +34,19 @@ export interface ActionCtx {
   state: State;
 }
 
+/**
+ * What an action that changed something reports back.
+ *
+ * `redirect` overrides where the player lands without costing the audit
+ * entry. Returning a bare `Response` skips auditing, which is right for a
+ * validation failure and wrong for anything that touched money.
+ */
+export interface ActionOutcome {
+  action: AuditAction;
+  notice: string;
+  redirect?: Response;
+}
+
 export interface ActionContext {
   user: User;
   kv: Deno.Kv;
@@ -94,12 +107,14 @@ export async function act(
   ctx: ActionCtx,
   run: (
     context: ActionContext,
-  ) => Promise<{ action: AuditAction; notice: string } | Response>,
+  ) => Promise<ActionOutcome | Response>,
 ): Promise<Response> {
   const context = await begin(ctx);
 
   try {
     const outcome = await run(context);
+    // A bare Response is a validation failure: it changed nothing, so there
+    // is nothing to record.
     if (outcome instanceof Response) return outcome;
 
     await audit(context.kv, {
@@ -109,7 +124,12 @@ export async function act(
       groupId: context.game.groupId,
       ip: clientIp(ctx.req),
     });
-    return backToGame(context.game.slug, { notice: outcome.notice });
+
+    // An action that changed something may still choose where to land — the
+    // organizer's payment controls send them back to the settlement screen
+    // they were working through. Auditing happens either way.
+    return outcome.redirect ??
+      backToGame(context.game.slug, { notice: outcome.notice });
   } catch (error) {
     if (error instanceof SignupError) {
       return backToGame(context.game.slug, { error: error.message });

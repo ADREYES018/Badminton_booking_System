@@ -69,7 +69,13 @@ export function gameActionRoutes(app: App<State>) {
         if (!userId) throw new HttpError(400, "No player was named.");
 
         await confirmPaid(kv, game.id, userId, user.id);
-        return backToSettlement(game.slug, { notice: "Payment confirmed." });
+        return {
+          action: "signup.payment_confirmed",
+          notice: "Payment confirmed.",
+          redirect: backToSettlement(game.slug, {
+            notice: "Payment confirmed.",
+          }),
+        };
       }),
   );
 
@@ -83,7 +89,13 @@ export function gameActionRoutes(app: App<State>) {
         if (!userId) throw new HttpError(400, "No player was named.");
 
         await refundPayment(kv, game.id, userId);
-        return backToSettlement(game.slug, { notice: "Refund recorded." });
+        return {
+          action: "signup.refunded",
+          notice: "Refund recorded.",
+          redirect: backToSettlement(game.slug, {
+            notice: "Refund recorded.",
+          }),
+        };
       }),
   );
 

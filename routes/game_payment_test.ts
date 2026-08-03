@@ -29,6 +29,7 @@ const { seedGame, seedPlayer } = await import("../lib/testing/fixtures.ts");
 const { freezeRoster, getSignup, joinGame } = await import(
   "../lib/data/signups.ts"
 );
+const { listAudit } = await import("../lib/data/audit.ts");
 type User = import("../lib/types.ts").User;
 
 const handler = app.handler();
@@ -75,7 +76,7 @@ function messageFrom(response: Response) {
  * cutoff satisfies both.
  */
 async function frozenGame() {
-  const { game, organizer } = await seedGame(kv, {
+  const { game, organizer, groupId } = await seedGame(kv, {
     courts: 1,
     playersPerCourt: 4,
     totalCostFils: 12000,
@@ -85,7 +86,7 @@ async function frozenGame() {
   const player = await seedPlayer(kv);
   await joinGame(kv, game.id, player);
   await freezeRoster(kv, game.id);
-  return { game, player, organizer };
+  return { game, player, organizer, groupId };
 }
 
 Deno.test("a player marking their share paid records a claim, not a confirmation", async () => {
@@ -149,6 +150,49 @@ Deno.test("the organizer confirming a payment settles it and returns to settleme
     `/organizer/games/${game.slug}/settlement`,
   );
   assertEquals((await getSignup(kv, game.id, player.id))?.payment, "paid");
+});
+
+Deno.test("confirming a payment is recorded in the audit trail", async () => {
+  const { game, player, organizer, groupId } = await frozenGame();
+  const auth = await signIn(organizer);
+
+  const response = await post(`/games/${game.slug}/payments/confirm`, auth, {
+    userId: player.id,
+  });
+  await response.body?.cancel();
+
+  // Redirecting somewhere other than the game page must not cost the entry.
+  // These are the actions where a record of who moved money matters most.
+  const entries = await listAudit(kv, groupId);
+  const confirmations = entries.filter(
+    (entry) =>
+      entry.action === "signup.payment_confirmed" &&
+      entry.targetId === game.id,
+  );
+
+  assertEquals(confirmations.length, 1);
+  assertEquals(confirmations[0]?.actorId, organizer.id);
+});
+
+Deno.test("recording a refund is written to the audit trail", async () => {
+  const { game, player, organizer, groupId } = await frozenGame();
+  const auth = await signIn(organizer);
+
+  for (const path of ["payments/confirm", "payments/refund"]) {
+    const response = await post(`/games/${game.slug}/${path}`, auth, {
+      userId: player.id,
+    });
+    await response.body?.cancel();
+  }
+
+  const entries = await listAudit(kv, groupId);
+  const refunds = entries.filter(
+    (entry) => entry.action === "signup.refunded" && entry.targetId === game.id,
+  );
+
+  assertEquals(refunds.length, 1);
+  assertEquals(refunds[0]?.actorId, organizer.id);
+  assertEquals((await getSignup(kv, game.id, player.id))?.payment, "refunded");
 });
 
 Deno.test("refunding a share nobody paid is refused", async () => {
