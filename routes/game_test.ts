@@ -23,7 +23,7 @@ Deno.env.set("APP_URL", "http://localhost:8000");
 
 const { app } = await import("../main.ts");
 const { getKv } = await import("../lib/kv/kv.ts");
-const { createSession, sessionCookie, SESSION_COOKIE } = await import(
+const { createSession, sessionCookie } = await import(
   "../lib/auth/session.ts"
 );
 const { CSRF_COOKIE, CSRF_FIELD } = await import("../lib/auth/middleware.ts");
