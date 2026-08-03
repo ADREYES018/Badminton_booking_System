@@ -19,7 +19,7 @@ Deno.test("a created game is reachable by slug and appears in both listings", as
     const bySlug = await getGameBySlug(kv, game.slug);
     assertEquals(bySlug?.id, game.id);
 
-    const open = await listOpenGames(kv);
+    const open = await listOpenGames(kv, groupId);
     assertEquals(open.map((g) => g.id), [game.id]);
 
     const byGroup = await listGamesByGroup(kv, groupId);
@@ -77,7 +77,7 @@ Deno.test("an unlisted game is absent from the public listing but readable by sl
       visibility: "unlisted",
     });
 
-    const open = await listOpenGames(kv);
+    const open = await listOpenGames(kv, groupId);
     assertEquals(open.some((g) => g.id === hidden.id), false);
     assertExists(await getGameBySlug(kv, hidden.slug));
   });
@@ -91,7 +91,9 @@ Deno.test("moving a game's start time moves both index pointers", async () => {
     await updateGame(kv, game.id, { startUtc: movedTo });
 
     // The old pointers must be gone, not merely shadowed by new ones.
-    const stalePublic = await kv.get(keys.gamesOpen(game.startUtc, game.id));
+    const stalePublic = await kv.get(
+      keys.gamesOpen(groupId, game.startUtc, game.id),
+    );
     assertEquals(stalePublic.value, null);
     const staleGroup = await kv.get(
       keys.gamesByGroup(groupId, game.startUtc, game.id),
@@ -99,7 +101,7 @@ Deno.test("moving a game's start time moves both index pointers", async () => {
     assertEquals(staleGroup.value, null);
 
     // And exactly one entry should remain in each listing.
-    assertEquals((await listOpenGames(kv)).length, 1);
+    assertEquals((await listOpenGames(kv, groupId)).length, 1);
     assertEquals((await listGamesByGroup(kv, groupId)).length, 1);
   });
 });
@@ -112,7 +114,7 @@ Deno.test("cancelling removes a game from the public listing but keeps the recor
     assertEquals(cancelled.status, "cancelled");
     assertEquals(cancelled.cancelledReason, "Court flooded");
 
-    assertEquals((await listOpenGames(kv)).length, 0);
+    assertEquals((await listOpenGames(kv, groupId)).length, 0);
     // The organizer still needs to see it, and the slug still resolves.
     assertEquals((await listGamesByGroup(kv, groupId)).length, 1);
     assertExists(await getGameBySlug(kv, game.slug));
@@ -121,26 +123,28 @@ Deno.test("cancelling removes a game from the public listing but keeps the recor
 
 Deno.test("making a game unlisted withdraws it from the public listing", async () => {
   await withTestKv(async (kv) => {
-    const { game } = await seedGame(kv);
+    const { game, groupId } = await seedGame(kv);
     await updateGame(kv, game.id, { visibility: "unlisted" });
-    assertEquals((await listOpenGames(kv)).length, 0);
+    assertEquals((await listOpenGames(kv, groupId)).length, 0);
   });
 });
 
 Deno.test("re-publishing an unlisted game restores the listing entry", async () => {
   await withTestKv(async (kv) => {
-    const { game } = await seedGame(kv);
+    const { game, groupId } = await seedGame(kv);
     await updateGame(kv, game.id, { visibility: "unlisted" });
     await updateGame(kv, game.id, { visibility: "public" });
-    assertEquals((await listOpenGames(kv)).map((g) => g.id), [game.id]);
+    assertEquals((await listOpenGames(kv, groupId)).map((g) => g.id), [
+      game.id,
+    ]);
   });
 });
 
 Deno.test("past games drop out of the upcoming listing", async () => {
   await withTestKv(async (kv) => {
     const yesterday = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
-    await seedGame(kv, { startUtc: yesterday });
-    assertEquals((await listOpenGames(kv)).length, 0);
+    const { groupId } = await seedGame(kv, { startUtc: yesterday });
+    assertEquals((await listOpenGames(kv, groupId)).length, 0);
   });
 });
 
@@ -163,7 +167,7 @@ Deno.test("upcoming games are listed soonest first", async () => {
       createdBy: organizer.id,
     });
 
-    const open = await listOpenGames(kv);
+    const open = await listOpenGames(kv, groupId);
     assertEquals(open.at(0)?.id, sooner.id);
   });
 });

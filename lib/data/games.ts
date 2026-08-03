@@ -144,7 +144,7 @@ export async function createGame(
     .set(keys.gamesByGroup(game.groupId, game.startUtc, game.id), game.id);
 
   if (isListedPublicly(game)) {
-    op = op.set(keys.gamesOpen(game.startUtc, game.id), game.id);
+    op = op.set(keys.gamesOpen(game.groupId, game.startUtc, game.id), game.id);
   }
 
   const result = await op.commit();
@@ -244,11 +244,15 @@ export async function updateGame(
     const wasListed = isListedPublicly(current);
     const isListed = isListedPublicly(next);
 
+    // A game never moves between groups, so the group segment of the key is
+    // the same on both sides and only `startUtc` can move the pointer.
     if (wasListed && (!isListed || next.startUtc !== current.startUtc)) {
-      op = op.delete(keys.gamesOpen(current.startUtc, gameId));
+      op = op.delete(
+        keys.gamesOpen(current.groupId, current.startUtc, gameId),
+      );
     }
     if (isListed && (!wasListed || next.startUtc !== current.startUtc)) {
-      op = op.set(keys.gamesOpen(next.startUtc, gameId), gameId);
+      op = op.set(keys.gamesOpen(next.groupId, next.startUtc, gameId), gameId);
     }
 
     return { op, result: next };
@@ -283,7 +287,9 @@ export async function cancelGame(
 
     let op = kv.atomic().check(entry).set(keys.game(gameId), next);
     if (isListedPublicly(current)) {
-      op = op.delete(keys.gamesOpen(current.startUtc, gameId));
+      op = op.delete(
+        keys.gamesOpen(current.groupId, current.startUtc, gameId),
+      );
     }
 
     return { op, result: next };
@@ -294,19 +300,20 @@ export async function cancelGame(
 }
 
 /**
- * Upcoming public games, soonest first.
+ * Upcoming public games in one group, soonest first.
  *
- * The index is keyed by start time, so "upcoming" is a range read from now
- * rather than a scan-and-filter.
+ * The index is keyed by group then start time, so "upcoming here" is a range
+ * read from now rather than a scan-and-filter.
  */
 export async function listOpenGames(
   kv: Deno.Kv,
+  groupId: string,
   options: { limit?: number; from?: Date } = {},
 ): Promise<Game[]> {
   const from = (options.from ?? new Date()).toISOString();
   const pointers = await listRecords<string>(kv, {
-    start: keys.gamesOpen(from, ""),
-    end: keys.gamesOpen("9999", ""),
+    start: keys.gamesOpen(groupId, from, ""),
+    end: keys.gamesOpen(groupId, "9999", ""),
   }, { limit: options.limit ?? 50 });
 
   return await hydrate(kv, pointers.map((p) => p.value));

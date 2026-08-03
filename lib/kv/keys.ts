@@ -63,9 +63,14 @@ export const keys = {
   game: (gameId: string) => ["game", gameId] as const,
   gamesByGroup: (groupId: string, startUtc: string, gameId: string) =>
     ["games_by_group", groupId, startUtc, gameId] as const,
-  /** Public listing only. Unlisted and password games are excluded. */
-  gamesOpen: (startUtc: string, gameId: string) =>
-    ["games_open", startUtc, gameId] as const,
+  /**
+   * Public listing for one group. Unlisted and password games are excluded.
+   *
+   * Scoped by group so a range read answers "what is on at this club?" without
+   * filtering, and so no group's games can appear in another's listing.
+   */
+  gamesOpen: (groupId: string, startUtc: string, gameId: string) =>
+    ["games_open", groupId, startUtc, gameId] as const,
   gameBySlug: (slug: string) => ["game_by_slug", slug] as const,
   /** Remembers that a user already cleared a game's join password. */
   gamePasswordOk: (gameId: string, userId: string) =>

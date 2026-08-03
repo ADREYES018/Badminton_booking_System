@@ -80,7 +80,7 @@ export function gamesRoute(app: App<State>) {
       canOrganize(user) ? "organizer" : "player",
     );
 
-    const games = await listOpenGames(kv);
+    const games = await listOpenGames(kv, group.id);
 
     const entries: Listed[] = await Promise.all(
       games.map(async (game) => ({
