@@ -9,7 +9,11 @@
     "start": "deno serve -A --unstable-kv _fresh/server.js",
     "check": "deno fmt --check && deno lint && deno check .",
     "test": "deno test -A --unstable-kv",
-    "test:watch": "deno test -A --unstable-kv --watch"
+    "test:watch": "deno test -A --unstable-kv --watch",
+    // Seeds demo.kv with an open game, a frozen game and three sessions.
+    "seed:demo": "deno run -A --unstable-kv tools/seed_demo.ts",
+    // Serves the built app against that database, for browser verification.
+    "serve:demo": "KV_PATH=demo.kv IBAN_ENC_KEY=BwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwcHBwc= APP_SECRET=CQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQkJCQk= APP_URL=http://localhost:8123 deno serve -A --unstable-kv --port 8123 _fresh/server.js"
   },
   "lint": {
     "rules": { "tags": ["fresh", "recommended"] },
