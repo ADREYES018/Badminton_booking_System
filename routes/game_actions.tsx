@@ -36,12 +36,16 @@ import {
 } from "../lib/data/matches.ts";
 
 /** Redirect back to the organizer's settlement screen for this game. */
-function backToSettlement(slug: string, params: Record<string, string> = {}) {
+function backToSettlement(
+  groupSlug: string,
+  slug: string,
+  params: Record<string, string> = {},
+) {
   const query = new URLSearchParams(params).toString();
   return new Response(null, {
     status: 303,
     headers: {
-      location: `/organizer/games/${slug}/settlement${
+      location: `/g/${groupSlug}/organizer/games/${slug}/settlement${
         query ? `?${query}` : ""
       }`,
     },
@@ -75,7 +79,7 @@ export function gameActionRoutes(app: App<State>) {
     "/games/:slug/payments/confirm",
     (ctx) =>
       act(ctx, async ({ user, kv, form, game }) => {
-        await requireOrganizer(ctx.state.auth, game.groupId);
+        const { group } = await requireOrganizer(ctx.state.auth, game.groupId);
 
         const userId = form.get("userId")?.toString() ?? "";
         if (!userId) throw new HttpError(400, "No player was named.");
@@ -84,7 +88,7 @@ export function gameActionRoutes(app: App<State>) {
         return {
           action: "signup.payment_confirmed",
           notice: "Payment confirmed.",
-          redirect: backToSettlement(game.slug, {
+          redirect: backToSettlement(group.slug, game.slug, {
             notice: "Payment confirmed.",
           }),
         };
@@ -95,7 +99,7 @@ export function gameActionRoutes(app: App<State>) {
     "/games/:slug/payments/refund",
     (ctx) =>
       act(ctx, async ({ kv, form, game }) => {
-        await requireOrganizer(ctx.state.auth, game.groupId);
+        const { group } = await requireOrganizer(ctx.state.auth, game.groupId);
 
         const userId = form.get("userId")?.toString() ?? "";
         if (!userId) throw new HttpError(400, "No player was named.");
@@ -104,7 +108,7 @@ export function gameActionRoutes(app: App<State>) {
         return {
           action: "signup.refunded",
           notice: "Refund recorded.",
-          redirect: backToSettlement(game.slug, {
+          redirect: backToSettlement(group.slug, game.slug, {
             notice: "Refund recorded.",
           }),
         };

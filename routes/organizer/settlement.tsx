@@ -13,12 +13,13 @@ import { Page } from "../../components/Layout.tsx";
 import { Alert, Avatar, Button, Card } from "../../components/ui.tsx";
 import { PaymentStateChip } from "../../components/PaymentPanel.tsx";
 import {
+  assertOrganizer,
   CSRF_FIELD,
   csrfCookie,
   HttpError,
   isSecureRequest,
-  requireOrganizer,
   requireUser,
+  resolveGroupAccess,
 } from "../../lib/auth/middleware.ts";
 import { getGameBySlug } from "../../lib/data/games.ts";
 import {
@@ -221,16 +222,21 @@ function PlayerRow(props: { row: Row; slug: string; csrf: string }) {
 }
 
 export function settlementRoute(app: App<State>) {
-  app.get("/organizer/games/:slug/settlement", async (ctx) => {
+  app.get("/g/:groupSlug/organizer/games/:slug/settlement", async (ctx) => {
     const user = requireUser(ctx.state.auth);
     const kv = ctx.state.auth.kv;
 
-    const game = await getGameBySlug(kv, ctx.params.slug!);
-    if (!game) throw new HttpError(404, "That game could not be found");
+    // Guarded against the club in the URL, and then against the game being one
+    // of that club's: being an organizer somewhere is not being an organizer
+    // here, and a game slug from another club is not this club's to settle.
+    const access = assertOrganizer(
+      await resolveGroupAccess(ctx.state.auth, ctx.params.groupSlug!),
+    );
 
-    // Guarded against the game's own group, not a global role: being an
-    // organizer somewhere is not being an organizer here.
-    await requireOrganizer(ctx.state.auth, game.groupId);
+    const game = await getGameBySlug(kv, ctx.params.slug!);
+    if (!game || game.groupId !== access.group.id) {
+      throw new HttpError(404, "That game could not be found");
+    }
 
     const [settlement, confirmed] = await Promise.all([
       settlementFor(kv, game.id),

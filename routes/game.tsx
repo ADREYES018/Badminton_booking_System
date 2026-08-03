@@ -98,6 +98,8 @@ interface DetailProps {
   payout?: PayoutDetails;
   /** Organizers see the settlement link and the attendance controls. */
   isOrganizer: boolean;
+  /** The club this game belongs to, for links back into its own screens. */
+  groupSlug: string;
   matches: Match[];
   /** Minted per request for a confirmed player once the cutoff has passed. */
   checkinToken?: string;
@@ -412,7 +414,7 @@ function GameDetail(props: DetailProps) {
 
         {props.isOrganizer && frozen && (
           <a
-            href={`/organizer/games/${game.slug}/settlement`}
+            href={`/g/${props.groupSlug}/organizer/games/${game.slug}/settlement`}
             class="text-label font-bold text-primary hover:underline w-fit"
           >
             View settlement →
@@ -526,6 +528,7 @@ export function gameRoute(app: App<State>) {
         csrf={ctx.state.auth.csrfToken}
         payout={access.group.payout}
         isOrganizer={access.isOrganizer}
+        groupSlug={access.group.slug}
         matches={matches}
         checkinToken={checkinToken}
         error={url.searchParams.get("error") ?? undefined}

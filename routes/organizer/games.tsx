@@ -14,13 +14,13 @@ import type { State } from "../../main.ts";
 import { Page } from "../../components/Layout.tsx";
 import { Alert, Button, Card, Field, Select } from "../../components/ui.tsx";
 import {
+  assertOrganizer,
   clientIp,
   CSRF_FIELD,
   csrfCookie,
   HttpError,
   isSecureRequest,
-  requireOrganizer,
-  requireUser,
+  resolveGroupAccess,
   verifyCsrf,
 } from "../../lib/auth/middleware.ts";
 import {
@@ -30,7 +30,6 @@ import {
   getGameBySlug,
   updateGame,
 } from "../../lib/data/games.ts";
-import { ensureDefaultGroup, ensureMembership } from "../../lib/data/groups.ts";
 import { audit } from "../../lib/data/audit.ts";
 import { enqueueCutoffFreeze } from "../../lib/queue/messages.ts";
 import { aedToFils } from "../../lib/domain/money.ts";
@@ -42,6 +41,7 @@ import type { Game, GuestPricingMode, Skill, User } from "../../lib/types.ts";
 interface FormProps {
   user: User;
   csrf: string;
+  groupSlug: string;
   game?: Game;
   error?: string;
   values?: Record<string, string>;
@@ -76,16 +76,16 @@ export function utcToDubaiLocal(iso: string): string {
 }
 
 function GameForm(props: FormProps) {
-  const { game, values = {} } = props;
+  const { game, groupSlug, values = {} } = props;
   const editing = game !== undefined;
   const field = (name: string, fallback: string) => values[name] ?? fallback;
 
   return (
-    <Page user={props.user} nav="games">
+    <Page user={props.user} nav="games" groupSlug={groupSlug}>
       <div class="max-w-2xl mx-auto flex flex-col gap-6">
         <div>
           <a
-            href={editing ? `/games/${game.slug}` : "/games"}
+            href={editing ? `/games/${game.slug}` : `/g/${groupSlug}/games`}
             class="text-label font-bold text-on-surface-variant hover:text-primary transition-colors"
           >
             ← Back
@@ -101,8 +101,8 @@ function GameForm(props: FormProps) {
           <form
             method="post"
             action={editing
-              ? `/organizer/games/${game.slug}`
-              : "/organizer/games"}
+              ? `/g/${groupSlug}/organizer/games/${game.slug}`
+              : `/g/${groupSlug}/organizer/games`}
             class="flex flex-col gap-5"
           >
             <input type="hidden" name={CSRF_FIELD} value={props.csrf} />
@@ -324,7 +324,7 @@ function GameForm(props: FormProps) {
           <Card>
             <form
               method="post"
-              action={`/organizer/games/${game.slug}/cancel`}
+              action={`/g/${groupSlug}/organizer/games/${game.slug}/cancel`}
               class="flex flex-col gap-3"
             >
               <input type="hidden" name={CSRF_FIELD} value={props.csrf} />
@@ -471,26 +471,47 @@ function formValues(form: FormData): Record<string, string> {
   return values;
 }
 
-/** Everyone who may post a game belongs to the one club Phase 2 runs. */
-async function organizerContext(state: State) {
-  const user = requireUser(state.auth);
-  const kv = state.auth.kv;
-  const group = await ensureDefaultGroup(kv, user.id);
-  await ensureMembership(
-    kv,
-    group.id,
-    user.id,
-    user.role === "player" ? "player" : "organizer",
+/** The club named in the URL, and proof the caller may administer it. */
+async function organizerContext(state: State, groupSlug: string) {
+  const access = assertOrganizer(
+    await resolveGroupAccess(state.auth, groupSlug),
   );
-  const access = await requireOrganizer(state.auth, group.id);
-  return { user, kv, group, access };
+  return {
+    user: access.user,
+    kv: state.auth.kv,
+    group: access.group,
+    access,
+  };
+}
+
+/**
+ * Loads a game and refuses one that belongs to another club.
+ *
+ * Game slugs are unique across the whole app, so without this check an
+ * organizer could reach any club's game by putting their own club in the URL.
+ * A game in someone else's club is not theirs to see, so this is a 404 rather
+ * than a 403.
+ */
+async function gameInGroup(kv: Deno.Kv, groupId: string, slug: string) {
+  const game = await getGameBySlug(kv, slug);
+  if (!game || game.groupId !== groupId) {
+    throw new HttpError(404, "That game could not be found");
+  }
+  return game;
 }
 
 export function organizerGameRoutes(app: App<State>) {
-  app.get("/organizer/games/new", async (ctx) => {
-    const { user } = await organizerContext(ctx.state);
+  app.get("/g/:groupSlug/organizer/games/new", async (ctx) => {
+    const { user, group } = await organizerContext(
+      ctx.state,
+      ctx.params.groupSlug!,
+    );
     const response = await ctx.render(
-      <GameForm user={user} csrf={ctx.state.auth.csrfToken} />,
+      <GameForm
+        user={user}
+        csrf={ctx.state.auth.csrfToken}
+        groupSlug={group.slug}
+      />,
     );
     response.headers.append(
       "set-cookie",
@@ -499,8 +520,11 @@ export function organizerGameRoutes(app: App<State>) {
     return response;
   });
 
-  app.post("/organizer/games", async (ctx) => {
-    const { user, kv, group } = await organizerContext(ctx.state);
+  app.post("/g/:groupSlug/organizer/games", async (ctx) => {
+    const { user, kv, group } = await organizerContext(
+      ctx.state,
+      ctx.params.groupSlug!,
+    );
     const form = await ctx.req.formData();
 
     if (!verifyCsrf(ctx.req, form.get(CSRF_FIELD)?.toString() ?? null)) {
@@ -513,6 +537,7 @@ export function organizerGameRoutes(app: App<State>) {
         <GameForm
           user={user}
           csrf={ctx.state.auth.csrfToken}
+          groupSlug={group.slug}
           error={parsed.error}
           values={formValues(form)}
         />,
@@ -556,13 +581,20 @@ export function organizerGameRoutes(app: App<State>) {
     return ctx.redirect(`/games/${game.slug}`);
   });
 
-  app.get("/organizer/games/:slug/edit", async (ctx) => {
-    const { user, kv } = await organizerContext(ctx.state);
-    const game = await getGameBySlug(kv, ctx.params.slug!);
-    if (!game) throw new HttpError(404, "That game could not be found");
+  app.get("/g/:groupSlug/organizer/games/:slug/edit", async (ctx) => {
+    const { user, kv, group } = await organizerContext(
+      ctx.state,
+      ctx.params.groupSlug!,
+    );
+    const game = await gameInGroup(kv, group.id, ctx.params.slug!);
 
     const response = await ctx.render(
-      <GameForm user={user} csrf={ctx.state.auth.csrfToken} game={game} />,
+      <GameForm
+        user={user}
+        csrf={ctx.state.auth.csrfToken}
+        groupSlug={group.slug}
+        game={game}
+      />,
     );
     response.headers.append(
       "set-cookie",
@@ -571,16 +603,18 @@ export function organizerGameRoutes(app: App<State>) {
     return response;
   });
 
-  app.post("/organizer/games/:slug", async (ctx) => {
-    const { user, kv, group } = await organizerContext(ctx.state);
+  app.post("/g/:groupSlug/organizer/games/:slug", async (ctx) => {
+    const { user, kv, group } = await organizerContext(
+      ctx.state,
+      ctx.params.groupSlug!,
+    );
     const form = await ctx.req.formData();
 
     if (!verifyCsrf(ctx.req, form.get(CSRF_FIELD)?.toString() ?? null)) {
       throw new HttpError(403, "That form expired. Please try again.");
     }
 
-    const game = await getGameBySlug(kv, ctx.params.slug!);
-    if (!game) throw new HttpError(404, "That game could not be found");
+    const game = await gameInGroup(kv, group.id, ctx.params.slug!);
 
     const parsed = parseForm(form);
     if ("error" in parsed) {
@@ -588,6 +622,7 @@ export function organizerGameRoutes(app: App<State>) {
         <GameForm
           user={user}
           csrf={ctx.state.auth.csrfToken}
+          groupSlug={group.slug}
           game={game}
           error={parsed.error}
           values={formValues(form)}
@@ -643,16 +678,18 @@ export function organizerGameRoutes(app: App<State>) {
     return ctx.redirect(`/games/${updated.slug}`);
   });
 
-  app.post("/organizer/games/:slug/cancel", async (ctx) => {
-    const { user, kv, group } = await organizerContext(ctx.state);
+  app.post("/g/:groupSlug/organizer/games/:slug/cancel", async (ctx) => {
+    const { user, kv, group } = await organizerContext(
+      ctx.state,
+      ctx.params.groupSlug!,
+    );
     const form = await ctx.req.formData();
 
     if (!verifyCsrf(ctx.req, form.get(CSRF_FIELD)?.toString() ?? null)) {
       throw new HttpError(403, "That form expired. Please try again.");
     }
 
-    const game = await getGameBySlug(kv, ctx.params.slug!);
-    if (!game) throw new HttpError(404, "That game could not be found");
+    const game = await gameInGroup(kv, group.id, ctx.params.slug!);
 
     const reason = cleanText(form.get("reason")?.toString() ?? "", 140);
     if (reason.length < 3) {
@@ -660,6 +697,7 @@ export function organizerGameRoutes(app: App<State>) {
         <GameForm
           user={user}
           csrf={ctx.state.auth.csrfToken}
+          groupSlug={group.slug}
           game={game}
           error="Say why the game is off — everyone on the roster will see it."
         />,

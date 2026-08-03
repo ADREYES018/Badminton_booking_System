@@ -30,6 +30,9 @@ const { freezeRoster, getSignup, joinGame } = await import(
   "../lib/data/signups.ts"
 );
 const { listAudit } = await import("../lib/data/audit.ts");
+const { createGroupForOwner, DEFAULT_GROUP_SLUG } = await import(
+  "../lib/data/groups.ts"
+);
 type User = import("../lib/types.ts").User;
 
 const handler = app.handler();
@@ -147,7 +150,7 @@ Deno.test("the organizer confirming a payment settles it and returns to settleme
   assertEquals(response.status, 303);
   assertStringIncludes(
     response.headers.get("location") ?? "",
-    `/organizer/games/${game.slug}/settlement`,
+    `/g/${DEFAULT_GROUP_SLUG}/organizer/games/${game.slug}/settlement`,
   );
   assertEquals((await getSignup(kv, game.id, player.id))?.payment, "paid");
 });
@@ -216,11 +219,40 @@ Deno.test("a player cannot open another game's settlement screen", async () => {
 
   const response = await handler(
     new Request(
-      `http://localhost:8000/organizer/games/${game.slug}/settlement`,
+      `http://localhost:8000/g/${DEFAULT_GROUP_SLUG}/organizer/games/${game.slug}/settlement`,
       { headers: { cookie: auth.cookie } },
     ),
   );
   await response.body?.cancel();
 
   assertEquals(response.status, 403);
+});
+
+Deno.test("an organizer cannot reach another club's game by naming their own club", async () => {
+  const { game } = await frozenGame();
+
+  // A club of their own, and organizer rights over that one only.
+  const outsider = await seedPlayer(kv);
+  const theirs = await createGroupForOwner(kv, {
+    name: "Other Club",
+    slug: `other-club-${crypto.randomUUID().slice(0, 8)}`,
+    ownerId: outsider.id,
+  });
+  const auth = await signIn(outsider);
+
+  for (
+    const path of [
+      `/g/${theirs.slug}/organizer/games/${game.slug}/settlement`,
+      `/g/${theirs.slug}/organizer/games/${game.slug}/edit`,
+    ]
+  ) {
+    const response = await handler(
+      new Request(`http://localhost:8000${path}`, {
+        headers: { cookie: auth.cookie },
+      }),
+    );
+    await response.body?.cancel();
+    // Not theirs to see, so it does not exist as far as they are concerned.
+    assertEquals(response.status, 404, path);
+  }
 });
