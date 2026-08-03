@@ -136,16 +136,51 @@ export async function loadGroupAccess(
   return { user, group, membership, isOrganizer };
 }
 
+/**
+ * Loads a group from its URL slug along with the caller's rights over it.
+ *
+ * Every `/g/:groupSlug/...` route starts here. Resolution is an explicit call
+ * rather than middleware so a route's access requirements stay visible in the
+ * route itself, the same reason `main.ts` registers routes by hand.
+ */
+export async function resolveGroupAccess(
+  state: AuthState,
+  slug: string,
+): Promise<GroupAccess> {
+  const user = requireUser(state);
+  const pointer = await state.kv.get<string>(keys.groupBySlug(slug));
+  if (!pointer.value) throw new HttpError(404, "That club could not be found");
+  return await loadGroupAccess(state, pointer.value);
+}
+
 /** Throws unless the caller may administer this specific group. */
 export async function requireOrganizer(
   state: AuthState,
   groupId: string,
 ): Promise<GroupAccess> {
-  const access = await loadGroupAccess(state, groupId);
+  return assertOrganizer(await loadGroupAccess(state, groupId));
+}
+
+/**
+ * The organizer check on rights that have already been loaded.
+ *
+ * Lets a route that resolved its group from a slug assert organizer access
+ * without paying for a second membership read.
+ */
+export function assertOrganizer(access: GroupAccess): GroupAccess {
   if (!access.isOrganizer) {
     throw new HttpError(403, "Only organizers can do that");
   }
   return access;
+}
+
+/** Throws unless the caller belongs to this group and is in good standing. */
+export function requireMember(access: GroupAccess): Membership {
+  if (!access.membership) {
+    throw new HttpError(403, "Join this club to do that");
+  }
+  assertNotBlocked(access.membership);
+  return access.membership;
 }
 
 /** Blocked members keep read access but may not RSVP. */
