@@ -109,8 +109,79 @@ function Stat(props: { label: string; children: ComponentChildren }) {
   );
 }
 
+/**
+ * Present, absent, or not yet marked.
+ *
+ * Three states, not two: `attendedAt` alone cannot tell "nobody has marked
+ * this player" apart from "marked as a no-show", and treating the absence of
+ * a mark as a no-show would count every unmarked player against themselves.
+ */
+function attendanceOf(signup: Signup): boolean | null {
+  if (signup.attendedAt !== undefined) return true;
+  if (signup.markedAbsentAt !== undefined) return false;
+  return null;
+}
+
+/**
+ * An attendance mark, as everyone but the organizer sees it.
+ *
+ * An unmarked player renders nothing at all. "Not marked yet" is the normal
+ * state before an organizer works through the roster, and labelling it would
+ * read as a verdict.
+ */
+function AttendanceChip(props: { signup: Signup }) {
+  const state = attendanceOf(props.signup);
+  if (state === null) return null;
+  return state
+    ? <Chip tone="success">Played</Chip>
+    : <Chip tone="neutral">No-show</Chip>;
+}
+
+/**
+ * The organizer's attendance controls for one player.
+ *
+ * Both buttons always render, with the current state shown as active rather
+ * than hidden, so a mis-mark can be corrected — which `setAttendance`
+ * supports, moving the count between columns rather than adding to both.
+ */
+function AttendanceToggle(
+  props: { signup: Signup; slug: string; csrf: string; name: string },
+) {
+  const state = attendanceOf(props.signup);
+
+  const button = (attended: boolean, label: string) => (
+    <form method="post" action={`/games/${props.slug}/attendance`}>
+      <input type="hidden" name={CSRF_FIELD} value={props.csrf} />
+      <input type="hidden" name="userId" value={props.signup.userId} />
+      <input type="hidden" name="attended" value={attended ? "1" : "0"} />
+      <Button
+        type="submit"
+        variant={state === attended ? "primary" : "ghost"}
+        class="px-4 py-2"
+        aria-pressed={state === attended}
+        aria-label={`Mark ${props.name} ${label.toLowerCase()}`}
+      >
+        {label}
+      </Button>
+    </form>
+  );
+
+  return (
+    <div class="flex gap-2 shrink-0">
+      {button(true, "Present")}
+      {button(false, "Absent")}
+    </div>
+  );
+}
+
 function RosterList(
-  props: { title: string; members: RosterMember[]; note?: string },
+  props: {
+    title: string;
+    members: RosterMember[];
+    note?: string;
+    /** Set only for the confirmed list once the cutoff has passed. */
+    attendance?: { slug: string; csrf: string };
+  },
 ) {
   if (props.members.length === 0) return null;
 
@@ -129,7 +200,7 @@ function RosterList(
         {props.members.map(({ signup, user }) => (
           <li
             key={signup.userId}
-            class="flex items-center gap-3 py-1"
+            class="flex flex-wrap items-center gap-3 py-1"
           >
             <Avatar
               name={user?.name ?? "Player"}
@@ -143,6 +214,16 @@ function RosterList(
             {signup.guests.map((guest) => (
               <Chip key={guest.id} tone="neutral">+1 {guest.name}</Chip>
             ))}
+            {props.attendance
+              ? (
+                <AttendanceToggle
+                  signup={signup}
+                  slug={props.attendance.slug}
+                  csrf={props.attendance.csrf}
+                  name={user?.name ?? "this player"}
+                />
+              )
+              : <AttendanceChip signup={signup} />}
           </li>
         ))}
       </ul>
@@ -308,6 +389,8 @@ function GameDetail(props: DetailProps) {
   const frozen = game.frozenPerHeadFils !== undefined;
   // There is nothing to report a result about until people have played.
   const started = new Date(game.startUtc).getTime() <= Date.now();
+  // Attendance is only meaningful once the roster is settled.
+  const pastCutoff = isPastCutoff(game.startUtc, game.cutoffHours);
 
   return (
     <Page user={user} nav="games">
@@ -396,7 +479,13 @@ function GameDetail(props: DetailProps) {
         <ActionPanel {...props} />
 
         <Card class="flex flex-col gap-6">
-          <RosterList title="Playing" members={props.confirmed} />
+          <RosterList
+            title="Playing"
+            members={props.confirmed}
+            attendance={props.isOrganizer && pastCutoff
+              ? { slug: game.slug, csrf: props.csrf }
+              : undefined}
+          />
           <RosterList
             title="Holding a spot"
             members={props.pending}
