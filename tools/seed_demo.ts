@@ -27,7 +27,9 @@ Deno.env.set("APP_URL", `http://localhost:${PORT}`);
 const { getKv } = await import("../lib/kv/kv.ts");
 const { seedGame, seedPlayers } = await import("../lib/testing/fixtures.ts");
 const { freezeRoster, joinGame } = await import("../lib/data/signups.ts");
-const { updatePayout } = await import("../lib/data/groups.ts");
+const { ensureMembership, updatePayout } = await import(
+  "../lib/data/groups.ts"
+);
 const { createSession, sessionCookie } = await import("../lib/auth/session.ts");
 const { mintCheckinToken } = await import("../lib/domain/checkin.ts");
 
@@ -63,6 +65,12 @@ const frozen = await seedGame(kv, {
   cutoffHours: 2,
   startUtc: new Date(Date.now() + HOUR_MS).toISOString(),
 });
+
+// Both games land in the same group: `ensureDefaultGroup` is idempotent on the
+// slug, so only the first organizer seeded becomes its owner. Organizer rights
+// are checked per group — a global `role: "organizer"` grants nothing — so this
+// second organizer needs a membership or every screen below 403s.
+await ensureMembership(kv, frozen.groupId, frozen.organizer.id, "organizer");
 
 const roster = await seedPlayers(kv, 4);
 for (const player of roster) await joinGame(kv, frozen.game.id, player);
