@@ -15,9 +15,13 @@ import type { App } from "fresh";
 import type { State } from "../main.ts";
 import { Page } from "../components/Layout.tsx";
 import { Avatar, Card, Chip, EmptyState } from "../components/ui.tsx";
-import { requireUser } from "../lib/auth/middleware.ts";
+import {
+  requireMember,
+  requireUser,
+  resolveGroupAccess,
+} from "../lib/auth/middleware.ts";
 import { getStats, listStats } from "../lib/data/matches.ts";
-import { ensureDefaultGroup, ensureMembership } from "../lib/data/groups.ts";
+import { redirectToGroup } from "../lib/routing/group_redirect.ts";
 import { getUser } from "../lib/data/users.ts";
 import type { PlayerStats, User } from "../lib/types.ts";
 
@@ -140,6 +144,7 @@ interface StatsProps {
   own: PlayerStats;
   ranked: Ranked[];
   qualifying: Ranked[];
+  groupSlug: string;
 }
 
 function StatsPage(props: StatsProps) {
@@ -147,7 +152,7 @@ function StatsPage(props: StatsProps) {
   const played = matchesPlayed(own);
 
   return (
-    <Page user={user} nav="stats">
+    <Page user={user} nav="stats" groupSlug={props.groupSlug}>
       <div class="flex flex-col gap-6 max-w-3xl mx-auto">
         <h1 class="text-headline-lg font-headline text-on-surface">Stats</h1>
 
@@ -244,17 +249,17 @@ function StatsPage(props: StatsProps) {
 }
 
 export function statsRoute(app: App<State>) {
-  app.get("/stats", async (ctx) => {
+  app.get("/g/:groupSlug/stats", async (ctx) => {
     const user = requireUser(ctx.state.auth);
     const kv = ctx.state.auth.kv;
 
-    const group = await ensureDefaultGroup(kv, user.id);
-    await ensureMembership(
-      kv,
-      group.id,
-      user.id,
-      user.role === "player" ? "player" : "organizer",
+    const access = await resolveGroupAccess(
+      ctx.state.auth,
+      ctx.params.groupSlug!,
     );
+    // A leaderboard names the club's players, so it is for the club's players.
+    requireMember(access);
+    const group = access.group;
 
     const [own, everyone] = await Promise.all([
       getStats(kv, group.id, user.id),
@@ -276,7 +281,10 @@ export function statsRoute(app: App<State>) {
         own={own}
         ranked={ranked}
         qualifying={qualifying}
+        groupSlug={group.slug}
       />,
     );
   });
+
+  app.get("/stats", (ctx) => redirectToGroup(ctx, "stats"));
 }

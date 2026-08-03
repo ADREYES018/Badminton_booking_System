@@ -32,13 +32,14 @@ import {
   CSRF_FIELD,
   csrfCookie,
   isSecureRequest,
-  loadGroupAccess,
+  requireMember,
   requireUser,
+  resolveGroupAccess,
 } from "../lib/auth/middleware.ts";
 import { listGamesByGroup } from "../lib/data/games.ts";
 import { getSignup, listRoster } from "../lib/data/signups.ts";
 import { getUser } from "../lib/data/users.ts";
-import { ensureDefaultGroup, ensureMembership } from "../lib/data/groups.ts";
+import { redirectToGroup } from "../lib/routing/group_redirect.ts";
 import { mintCheckinToken } from "../lib/domain/checkin.ts";
 import { formatGameTime, isPastCutoff } from "../lib/domain/time.ts";
 import type { VNode } from "preact";
@@ -188,18 +189,18 @@ function NoGameView() {
 }
 
 export function checkinRoute(app: App<State>) {
-  app.get("/checkin", async (ctx) => {
+  app.get("/g/:groupSlug/checkin", async (ctx) => {
     const user = requireUser(ctx.state.auth);
     const kv = ctx.state.auth.kv;
 
-    const group = await ensureDefaultGroup(kv, user.id);
-    await ensureMembership(
-      kv,
-      group.id,
-      user.id,
-      user.role === "player" ? "player" : "organizer",
+    const access = await resolveGroupAccess(
+      ctx.state.auth,
+      ctx.params.groupSlug!,
     );
-    const access = await loadGroupAccess(ctx.state.auth, group.id);
+    // Check-in shows a player their own code or an organizer the roster, so
+    // there is nothing here for someone outside the club.
+    requireMember(access);
+    const group = access.group;
 
     const render = async (node: VNode) => {
       const response = await ctx.render(node);
@@ -220,7 +221,7 @@ export function checkinRoute(app: App<State>) {
 
       if (!game) {
         return await render(
-          <Page user={user} nav="checkin">
+          <Page user={user} nav="checkin" groupSlug={group.slug}>
             <NoGameView />
           </Page>,
         );
@@ -235,7 +236,7 @@ export function checkinRoute(app: App<State>) {
       );
 
       return await render(
-        <Page user={user} nav="checkin">
+        <Page user={user} nav="checkin" groupSlug={group.slug}>
           <OrganizerView
             user={user}
             game={game}
@@ -261,9 +262,11 @@ export function checkinRoute(app: App<State>) {
     }
 
     return await render(
-      <Page user={user} nav="checkin">
+      <Page user={user} nav="checkin" groupSlug={group.slug}>
         <PlayerView user={user} codes={codes} />
       </Page>,
     );
   });
+
+  app.get("/checkin", (ctx) => redirectToGroup(ctx, "checkin"));
 }

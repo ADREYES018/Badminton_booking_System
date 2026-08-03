@@ -135,7 +135,7 @@ export function gamesRoute(app: App<State>) {
     const url = new URL(ctx.req.url);
 
     return ctx.render(
-      <Page user={user} nav="games">
+      <Page user={user} nav="games" groupSlug={group.slug}>
         <div class="flex flex-col gap-8">
           <div class="flex items-start justify-between gap-4">
             <div>

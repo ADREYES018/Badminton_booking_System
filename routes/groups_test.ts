@@ -284,3 +284,62 @@ Deno.test("an unknown club slug is a 404", async () => {
   await response.body?.cancel();
   assertEquals(response.status, 404);
 });
+
+Deno.test("a club's stats and check-in are for its members", async () => {
+  const { organizer } = await seedGame(kv);
+  const member = await updateUser(kv, organizer.id, {
+    phone: "+971500000003",
+  });
+  const stranger = await seedComplete("nosy");
+
+  for (const page of ["stats", "checkin"]) {
+    const path = `/g/${DEFAULT_GROUP_SLUG}/${page}`;
+
+    const allowed = await get(path, await signIn(member));
+    await allowed.body?.cancel();
+    assertEquals(allowed.status, 200, `member should see ${page}`);
+
+    const refused = await get(path, await signIn(stranger));
+    await refused.body?.cancel();
+    assertEquals(refused.status, 403, `stranger should not see ${page}`);
+  }
+});
+
+Deno.test("the bare stats and check-in paths follow a lone club through", async () => {
+  const player = await seedComplete("bare-paths");
+  const owner = await seedComplete("bare-owner");
+  const group = await createGroupForOwner(kv, {
+    name: "Bare Club",
+    slug: `bare-club-${crypto.randomUUID().slice(0, 8)}`,
+    ownerId: owner.id,
+  });
+  await ensureMembership(kv, group.id, player.id);
+  const auth = await signIn(player);
+
+  for (const page of ["stats", "checkin"] as const) {
+    const response = await get(`/${page}`, auth);
+    await response.body?.cancel();
+    assertEquals(response.status, 302);
+    assertEquals(locationOf(response), `/g/${group.slug}/${page}`);
+  }
+});
+
+Deno.test("a club page keeps its navigation inside that club", async () => {
+  const { organizer } = await seedGame(kv);
+  const member = await updateUser(kv, organizer.id, {
+    phone: "+971500000004",
+  });
+
+  const response = await get(
+    `/g/${DEFAULT_GROUP_SLUG}/games`,
+    await signIn(member),
+  );
+  const body = await response.text();
+
+  // Tapping "Stats" from a club's games page must not bounce through a
+  // redirect that could land on a different club.
+  assertStringIncludes(body, `href="/g/${DEFAULT_GROUP_SLUG}/stats"`);
+  assertStringIncludes(body, `href="/g/${DEFAULT_GROUP_SLUG}/checkin"`);
+  // Profile is not a club page, so it keeps its single address.
+  assertStringIncludes(body, 'href="/profile"');
+});

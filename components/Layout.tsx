@@ -82,7 +82,20 @@ const NAV_ITEMS: NavItem[] = [
   },
 ];
 
-export function BottomNav(props: { active?: NavKey }) {
+/**
+ * Keeps navigation inside the club being viewed.
+ *
+ * The bare paths still work — they redirect — but sending someone from one
+ * club's games to another club's stats because that is where a redirect landed
+ * them would be its own kind of wrong. Profile is not a club page, so it keeps
+ * its single address.
+ */
+function navHref(item: NavItem, groupSlug?: string): string {
+  if (!groupSlug || item.key === "profile") return item.href;
+  return `/g/${groupSlug}/${item.key}`;
+}
+
+export function BottomNav(props: { active?: NavKey; groupSlug?: string }) {
   return (
     <nav
       aria-label="Main"
@@ -94,7 +107,7 @@ export function BottomNav(props: { active?: NavKey }) {
         return (
           <a
             key={item.key}
-            href={item.href}
+            href={navHref(item, props.groupSlug)}
             aria-current={active ? "page" : undefined}
             class={cx(
               "flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-lg transition-colors",
@@ -112,11 +125,12 @@ export function BottomNav(props: { active?: NavKey }) {
   );
 }
 
-export function AppHeader(props: { user?: User | null }) {
+export function AppHeader(props: { user?: User | null; groupSlug?: string }) {
+  const home = props.groupSlug ? `/g/${props.groupSlug}/games` : "/games";
   return (
     <header class="w-full border-b border-outline-variant/40 bg-surface">
       <div class="max-w-[1200px] mx-auto px-5 md:px-10 py-4 flex items-center justify-between">
-        <a href="/games" class="flex items-center" aria-label="Smash Club home">
+        <a href={home} class="flex items-center" aria-label="Smash Club home">
           <LogoHorizontal class="h-9 w-auto text-on-surface" />
         </a>
         {props.user && (
@@ -137,6 +151,8 @@ export function Page(
     children: ComponentChildren;
     user?: User | null;
     nav?: NavKey;
+    /** Keeps the header and navigation pointing inside this club. */
+    groupSlug?: string;
     /** Hides the chrome for focused flows such as login. */
     bare?: boolean;
     class?: string;
@@ -152,7 +168,7 @@ export function Page(
 
   return (
     <div class="min-h-dvh flex flex-col">
-      <AppHeader user={props.user} />
+      <AppHeader user={props.user} groupSlug={props.groupSlug} />
       <main
         class={cx(
           "flex-1 w-full max-w-[1200px] mx-auto px-5 md:px-10 pt-8 pb-32",
@@ -161,7 +177,7 @@ export function Page(
       >
         {props.children}
       </main>
-      <BottomNav active={props.nav} />
+      <BottomNav active={props.nav} groupSlug={props.groupSlug} />
     </div>
   );
 }
