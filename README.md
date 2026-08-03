@@ -13,8 +13,9 @@ cp .env.example .env         # then paste the keys in
 deno task dev                # http://localhost:5173
 ```
 
-With no `RESEND_API_KEY` set, emails are printed to the console — the six-digit
-sign-in code appears there, so no mail account is needed in development.
+With no `GMAIL_REFRESH_TOKEN` set, emails are printed to the console — the
+six-digit sign-in code appears there, so no Google project is needed in
+development.
 
 Set `SUPER_ADMIN_EMAIL` to your own address before first sign-in; that account
 is promoted to platform owner.
@@ -116,28 +117,68 @@ deno deploy database assign smash-club-kv --app smash-club
 payloads and invite links are built from it, and a deployment without it refuses
 to start rather than handing out links pointing at localhost.
 
-| Variable            | Value                                              |
-| ------------------- | -------------------------------------------------- |
-| `APP_URL`           | `https://<your-app>.deno.dev`                      |
-| `APP_SECRET`        | from `genkey`, mark as secret                      |
-| `IBAN_ENC_KEY`      | from `genkey`, mark as secret                      |
-| `SUPER_ADMIN_EMAIL` | your address — promoted to platform owner on login |
-| `RESEND_API_KEY`    | from Resend, mark as secret                        |
-| `EMAIL_FROM`        | see below                                          |
-| `KV_PATH`           | **unset** — Deploy provides its own                |
+| Variable              | Value                                                                           |
+| --------------------- | ------------------------------------------------------------------------------- |
+| `APP_URL`             | `https://<your-app>.deno.dev`                                                   |
+| `APP_SECRET`          | from `genkey`, mark as secret                                                   |
+| `IBAN_ENC_KEY`        | from `genkey`, mark as secret                                                   |
+| `SUPER_ADMIN_EMAIL`   | your address — promoted to platform owner on login                              |
+| `GMAIL_CLIENT_ID`     | from the OAuth client, see below                                                |
+| `GMAIL_CLIENT_SECRET` | from the OAuth client, mark as secret                                           |
+| `GMAIL_REFRESH_TOKEN` | from the consent flow, mark as secret                                           |
+| `EMAIL_FROM`          | **required**, and must name the Gmail account that authorised the refresh token |
+| `KV_PATH`             | **unset** — Deploy provides its own                                             |
 
-**5. Email.** Without `RESEND_API_KEY` the app logs sign-in codes to the server
-console instead of sending them, which on a deployment means nobody can sign in.
-Resend's `onboarding@resend.dev` needs no domain and no DNS, but only delivers
-to the address that owns the Resend account:
+**5. Email.** Without `GMAIL_REFRESH_TOKEN` the app logs sign-in codes to the
+server console instead of sending them, which on a deployment means nobody can
+sign in.
+
+Mail goes out through the Gmail API as the club's own account, so it leaves
+Google's servers signed by Google's DKIM key for `gmail.com` and the `From:`
+claim is true. A relay would be one API key instead of an OAuth client, but it
+signs as itself while claiming a `gmail.com` `From:`, and consumer Gmail scores
+that mismatch down — which puts sign-in codes in spam for a player base that is
+mostly on Gmail.
+
+Set up once, signed in **as the club's Gmail account**:
+
+1. Create the account itself, e.g. `smashclub.dxb@gmail.com`. Replies and
+   bounces land there rather than on a personal address.
+2. Google Cloud console → create a project.
+3. APIs & Services → Library → enable the **Gmail API**.
+4. OAuth consent screen → External → add the club account as a test user → scope
+   `https://www.googleapis.com/auth/gmail.send` and nothing else. That scope
+   sends and cannot read, which is the point of choosing it.
+5. **Publishing status → In production.** Not optional. A consent screen left in
+   Testing expires its refresh tokens after **seven days**, and mail then stops
+   with no warning and no error until something tries to send. Google may show
+   an unverified-app warning during consent; that is expected and can be clicked
+   through for an account authorising its own project.
+6. Credentials → OAuth client ID → **Desktop app**. That gives a client which
+   can complete the flow against `http://localhost` without hosting anything.
+7. Run the consent flow once, granting from the club account, and keep the
+   `refresh_token` from the response. The authorisation request must carry
+   `access_type=offline` **and** `prompt=consent`, or Google returns an access
+   token with no refresh token at all — the single most common way this step
+   goes wrong.
+8. Set the three `GMAIL_*` variables on Deno Deploy, along with:
 
 ```
-EMAIL_FROM="Smash Club <onboarding@resend.dev>"
+EMAIL_FROM="Smash Club <smashclub.dxb@gmail.com>"
 ```
 
-That is enough to sign in yourself and walk the whole app on a real phone.
-Inviting anyone else means verifying a domain in Resend and pointing
-`EMAIL_FROM` at it.
+`EMAIL_FROM` has no default. It must name the account that authorised the
+refresh token: Gmail silently rewrites a `From:` it does not recognise as an
+alias of that account, so a wrong value here does not fail — it sends under the
+real address instead, with no error attached.
+
+The refresh token can send mail as the club indefinitely. It belongs in Deno
+Deploy's environment settings and nowhere else — not in the repository, and not
+in a `.env` file that could be committed.
+
+Consumer Gmail allows roughly 500 recipients a day. Sign-in codes and game
+reminders for a club this size are far below that, but a reminder fan-out to
+every member of every game counts against it.
 
 **6. Sign in once** with `SUPER_ADMIN_EMAIL` to claim platform ownership, then
 create a club from `/groups`.
