@@ -7,12 +7,17 @@ import {
   consumeGroupInvite,
   createGroup,
   createGroupForOwner,
+  decideJoinRequest,
   ensureMembership,
+  getJoinRequest,
   getMembership,
   InviteError,
   issueGroupInvite,
   listGroupsForUser,
+  listJoinRequests,
   MembershipError,
+  requestToJoin,
+  setMemberBlocked,
   updateGroup,
 } from "./groups.ts";
 import { keys } from "../kv/keys.ts";
@@ -265,5 +270,152 @@ Deno.test("adding someone already in the group leaves their role untouched", asy
 
     const readded = await addMemberByEmail(kv, group.id, owner.email);
     assertEquals(readded.role, "organizer");
+  });
+});
+
+Deno.test("an approved request admits the applicant as a player", async () => {
+  await withTestKv(async (kv) => {
+    const owner = await seedOwner(kv);
+    const applicant = await seedPlayer(kv);
+    const group = await seedGroup(kv, owner);
+
+    await requestToJoin(kv, group.id, applicant.id, "Friend of Sam");
+    const decided = await decideJoinRequest(
+      kv,
+      group.id,
+      applicant.id,
+      "approved",
+      owner.id,
+    );
+
+    assertEquals(decided.status, "approved");
+    assertEquals(decided.decidedBy, owner.id);
+    assertEquals(
+      (await getMembership(kv, group.id, applicant.id))?.role,
+      "player",
+    );
+  });
+});
+
+Deno.test("a rejected request leaves the applicant outside the club", async () => {
+  await withTestKv(async (kv) => {
+    const owner = await seedOwner(kv);
+    const applicant = await seedPlayer(kv);
+    const group = await seedGroup(kv, owner);
+
+    await requestToJoin(kv, group.id, applicant.id);
+    const decided = await decideJoinRequest(
+      kv,
+      group.id,
+      applicant.id,
+      "rejected",
+      owner.id,
+    );
+
+    assertEquals(decided.status, "rejected");
+    assertEquals(await getMembership(kv, group.id, applicant.id), null);
+  });
+});
+
+Deno.test("asking twice does not queue twice", async () => {
+  await withTestKv(async (kv) => {
+    const owner = await seedOwner(kv);
+    const applicant = await seedPlayer(kv);
+    const group = await seedGroup(kv, owner);
+
+    const first = await requestToJoin(kv, group.id, applicant.id, "Please");
+    const second = await requestToJoin(kv, group.id, applicant.id, "Please!!");
+
+    // The original request stands, message and timestamp intact.
+    assertEquals(second.requestedAt, first.requestedAt);
+    assertEquals(second.message, "Please");
+    assertEquals((await listJoinRequests(kv, group.id)).length, 1);
+  });
+});
+
+Deno.test("a rejected applicant may ask again", async () => {
+  await withTestKv(async (kv) => {
+    const owner = await seedOwner(kv);
+    const applicant = await seedPlayer(kv);
+    const group = await seedGroup(kv, owner);
+
+    await requestToJoin(kv, group.id, applicant.id);
+    await decideJoinRequest(kv, group.id, applicant.id, "rejected", owner.id);
+
+    const again = await requestToJoin(
+      kv,
+      group.id,
+      applicant.id,
+      "Reconsider?",
+    );
+    assertEquals(again.status, "pending");
+    assertEquals(again.decidedAt, undefined);
+    // Still one row: the fresh request replaces the settled one.
+    assertEquals((await listJoinRequests(kv, group.id)).length, 1);
+  });
+});
+
+Deno.test("a blocked member cannot request their way back in", async () => {
+  await withTestKv(async (kv) => {
+    const owner = await seedOwner(kv);
+    const player = await seedPlayer(kv);
+    const group = await seedGroup(kv, owner);
+
+    await ensureMembership(kv, group.id, player.id);
+    await setMemberBlocked(kv, group.id, player.id, true, {
+      actorId: owner.id,
+    });
+
+    await assertRejects(
+      () => requestToJoin(kv, group.id, player.id),
+      MembershipError,
+      "blocked",
+    );
+  });
+});
+
+Deno.test("an existing member has nothing to request", async () => {
+  await withTestKv(async (kv) => {
+    const owner = await seedOwner(kv);
+    const group = await seedGroup(kv, owner);
+
+    await assertRejects(
+      () => requestToJoin(kv, group.id, owner.id),
+      MembershipError,
+      "already a member",
+    );
+  });
+});
+
+Deno.test("a request cannot be decided twice", async () => {
+  await withTestKv(async (kv) => {
+    const owner = await seedOwner(kv);
+    const applicant = await seedPlayer(kv);
+    const group = await seedGroup(kv, owner);
+
+    await requestToJoin(kv, group.id, applicant.id);
+    await decideJoinRequest(kv, group.id, applicant.id, "approved", owner.id);
+
+    await assertRejects(
+      () => decideJoinRequest(kv, group.id, applicant.id, "rejected", owner.id),
+      MembershipError,
+      "already been decided",
+    );
+    // The approval stands: a second decision cannot eject someone.
+    assertExists(await getMembership(kv, group.id, applicant.id));
+  });
+});
+
+Deno.test("requests are scoped to their own group", async () => {
+  await withTestKv(async (kv) => {
+    const owner = await seedOwner(kv);
+    const applicant = await seedPlayer(kv);
+    const first = await seedGroup(kv, owner, "first-club");
+    const second = await seedGroup(kv, owner, "second-club");
+
+    await requestToJoin(kv, first.id, applicant.id);
+
+    assertEquals((await listJoinRequests(kv, second.id)).length, 0);
+    assertEquals(await getJoinRequest(kv, second.id, applicant.id), null);
   });
 });

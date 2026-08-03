@@ -60,6 +60,15 @@ export const keys = {
     ["members_by_user", userId, groupId] as const,
   /** Key is a hash of the token; the raw token is never stored. */
   groupInvite: (tokenHash: string) => ["group_invite", tokenHash] as const,
+  /**
+   * One request per person per group, so asking twice cannot queue twice.
+   * Status lives in the record rather than the key: an organizer reads the
+   * whole list and there are never enough requests to want an index per state.
+   */
+  joinRequest: (groupId: string, userId: string) =>
+    ["join_request", groupId, userId] as const,
+  joinRequestsByGroupPrefix: (groupId: string) =>
+    ["join_request", groupId] as const,
 
   // ---- Games --------------------------------------------------------------
   game: (gameId: string) => ["game", gameId] as const,

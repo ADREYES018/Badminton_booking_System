@@ -104,6 +104,26 @@ export interface GroupInvite {
   redeemedBy?: string;
 }
 
+export type JoinRequestStatus = "pending" | "approved" | "rejected";
+
+/**
+ * A player asking an organizer to let them into a group.
+ *
+ * The record survives its decision so a rejected applicant is not silently
+ * re-queued by tapping the button again, and so an organizer can see who they
+ * have already turned away.
+ */
+export interface JoinRequest {
+  v: 1;
+  groupId: string;
+  userId: string;
+  status: JoinRequestStatus;
+  message?: string;
+  requestedAt: string;
+  decidedAt?: string;
+  decidedBy?: string;
+}
+
 export type CourtMode = "fixed" | "flexible";
 export type CourtStatus = "not_reserved" | "reserved" | "paid";
 export type GameVisibility = "public" | "unlisted" | "password";

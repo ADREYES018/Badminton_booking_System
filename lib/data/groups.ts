@@ -19,6 +19,7 @@ import type {
   Group,
   GroupInvite,
   GroupRole,
+  JoinRequest,
   Membership,
   PayoutDetails,
 } from "../types.ts";
@@ -365,6 +366,128 @@ export async function addMemberByEmail(
     );
   }
   return await ensureMembership(kv, groupId, user.id, role);
+}
+
+/**
+ * Asks an organizer for a place in a group.
+ *
+ * Idempotent while pending: tapping the button twice does not queue twice, and
+ * the original message and timestamp are kept. A rejected applicant may ask
+ * again — a rejection is a decision about one request, not a permanent ban.
+ * Blocking is the tool for that, and a blocked member is refused outright.
+ */
+export async function requestToJoin(
+  kv: Deno.Kv,
+  groupId: string,
+  userId: string,
+  message?: string,
+): Promise<JoinRequest> {
+  const membership = await getMembership(kv, groupId, userId);
+  if (membership?.blocked) {
+    throw new MembershipError("You are blocked from this club.");
+  }
+  if (membership) {
+    throw new MembershipError("You are already a member of this club.");
+  }
+
+  const result = await withRetry(kv, async (kv) => {
+    const entry = await getRecord<JoinRequest>(
+      kv,
+      keys.joinRequest(groupId, userId),
+    );
+    if (entry.value?.status === "pending") {
+      return { op: kv.atomic().check(entry), result: entry.value };
+    }
+
+    const request: JoinRequest = {
+      v: 1,
+      groupId,
+      userId,
+      status: "pending",
+      message,
+      requestedAt: nowIso(),
+    };
+    return {
+      op: kv.atomic().check(entry).set(
+        keys.joinRequest(groupId, userId),
+        request,
+      ),
+      result: request,
+    };
+  });
+
+  if (!result) throw new MembershipError("That request did not go through.");
+  return result;
+}
+
+export async function getJoinRequest(
+  kv: Deno.Kv,
+  groupId: string,
+  userId: string,
+): Promise<JoinRequest | null> {
+  const entry = await getRecord<JoinRequest>(
+    kv,
+    keys.joinRequest(groupId, userId),
+  );
+  return entry.value;
+}
+
+/** Every request ever made of a group, decided or not. */
+export async function listJoinRequests(
+  kv: Deno.Kv,
+  groupId: string,
+  limit = 200,
+): Promise<JoinRequest[]> {
+  const rows = await listRecords<JoinRequest>(
+    kv,
+    { prefix: keys.joinRequestsByGroupPrefix(groupId) },
+    { limit },
+  );
+  return rows.map((row) => row.value);
+}
+
+/**
+ * Settles a request, admitting the applicant when approved.
+ *
+ * The membership is written after the decision commits rather than inside it:
+ * `ensureMembership` has its own atomic guard, and a decision recorded without
+ * its membership is recoverable by approving again, whereas a membership with
+ * no decision behind it is not.
+ */
+export async function decideJoinRequest(
+  kv: Deno.Kv,
+  groupId: string,
+  userId: string,
+  decision: "approved" | "rejected",
+  deciderId: string,
+): Promise<JoinRequest> {
+  const result = await withRetry(kv, async (kv) => {
+    const entry = await getRecord<JoinRequest>(
+      kv,
+      keys.joinRequest(groupId, userId),
+    );
+    if (!entry.value) throw new MembershipError("That request is gone.");
+    if (entry.value.status !== "pending") {
+      throw new MembershipError("That request has already been decided.");
+    }
+
+    const next: JoinRequest = {
+      ...entry.value,
+      status: decision,
+      decidedAt: nowIso(),
+      decidedBy: deciderId,
+    };
+    return {
+      op: kv.atomic().check(entry).set(keys.joinRequest(groupId, userId), next),
+      result: next,
+    };
+  });
+
+  if (!result) throw new MembershipError("That decision did not apply.");
+  if (decision === "approved") {
+    await ensureMembership(kv, groupId, userId, "player");
+  }
+  return result;
 }
 
 /** An invite that cannot be redeemed, with a reason worth showing the user. */
