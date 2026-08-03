@@ -43,6 +43,9 @@ export async function seedGame(
   });
 
   const group = await ensureDefaultGroup(kv, organizer.id);
+  // Owning a group is not the same as being in it: the owner needs a
+  // membership row too, or they appear in no club list of their own.
+  await ensureMembership(kv, group.id, organizer.id, "organizer");
   const startUtc = options.startUtc ?? futureStart();
 
   const game = await createGame(kv, {
