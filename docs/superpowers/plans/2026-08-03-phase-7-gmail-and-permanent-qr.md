@@ -1,47 +1,83 @@
-# Phase 7: Brevo Email and Permanent QR Implementation Plan
+# Phase 7: Gmail API Email and Permanent QR Implementation Plan
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Let real players sign in (Brevo replaces Resend) and carry one permanent check-in QR code instead of one short-lived code per game.
+**Goal:** Let real players sign in (the Gmail API replaces Resend) and carry one permanent check-in QR code instead of one short-lived code per game.
 
-**Architecture:** Two independent changes. The email swap stays entirely inside `lib/email.ts`, which already hides the provider from every caller. The QR change replaces a token carrying `gameId.userId.window.mac` with one carrying `userId.version.mac` — no game, no expiry — and moves the per-game check from the token into a confirmed-roster lookup in the scanner's route handler.
+**Architecture:** Two independent changes. The email swap stays entirely inside `lib/email.ts`, which already hides the provider from every caller. It sends as `smashclub.dxb@gmail.com` through Google's own servers, so DKIM aligns with the `From:` domain and sign-in codes reach Gmail inboxes rather than spam. The QR change replaces a token carrying `gameId.userId.window.mac` with one carrying `userId.version.mac` — no game, no expiry — and moves the per-game check from the token into a confirmed-roster lookup in the scanner's route handler.
 
 **Tech Stack:** Deno, Fresh 2, Preact, Deno KV, `@std/assert` for tests.
 
-**Spec:** `docs/superpowers/specs/2026-08-03-phase-7-brevo-and-permanent-qr-design.md`
+**Spec:** `docs/superpowers/specs/2026-08-03-phase-7-gmail-and-permanent-qr-design.md`
 
 ## Global Constraints
 
 - Deno + Fresh 2. Tests run with `deno task test`; lint, format and typecheck run with `deno task check`. Both must pass before any commit.
-- Tests never hit the network. `lib/email.ts` logs to the console when the API key is unset, and that path must survive this change.
+- Tests never hit the network. `lib/email.ts` logs to the console when `GMAIL_REFRESH_TOKEN` is unset, and that path must survive this change. Every function that would make a request is either not called by the tests or tested through a stubbed `fetch`.
 - Comments explain *why*, not *what*. Match the density and voice of the surrounding files — the existing headers in `lib/domain/checkin.ts` and `lib/email.ts` are the reference.
 - The check-in MAC keeps `MAC_LENGTH = 16` hex characters and reuses `hmacHex` / `timingSafeEqual` from `lib/crypto.ts`.
 - The signed string for a check-in token is exactly `checkin:v2:${userId}:${version}`. The `v2` lives inside the signed bytes.
-- No new dependencies. Brevo is called with `fetch`, not an SDK.
+- No new dependencies. Google is called with `fetch`, not with `googleapis` or any other SDK. `@std/encoding/base64url` is already available and is used rather than hand-rolling the alphabet swap.
 - `EMAIL_FROM` has no default. Unset is an error at send time.
+- Nothing logs the refresh token, the client secret, or an access token. `EmailError` carries response bodies, so a message that would echo a credential is trimmed before it is thrown.
 
 ---
-
-### Task 1: Brevo replaces Resend in the mail transport
+### Task 1: The Gmail API replaces Resend in the mail transport
 
 **Files:**
-- Modify: `lib/email.ts:13` (endpoint), `:44-46` (`fromAddress`), `:48-75` (`sendEmail`), `:77-105` (`EmailError`)
+- Modify: `lib/email.ts:1-8` (header), `:13` (endpoint), `:44-46` (`fromAddress`), `:48-77` (`sendEmail`), `:79-115` (`EmailError`)
 - Test: `lib/email_test.ts`
 
 **Interfaces:**
 - Consumes: nothing from other tasks.
-- Produces: `sendEmail(message: EmailMessage): Promise<void>` — unchanged signature. `parseSender(value: string): {name: string, email: string}` exported for tests. `EmailError` keeps `status`, `detail`, `isConfiguration`, `reason`.
+- Produces: `sendEmail(message: EmailMessage): Promise<void>` — unchanged signature. `parseSender(value?: string): {name: string, email: string}`, `encodeHeader(value: string): string`, and `buildMime(message: EmailMessage): string` exported for tests. `EmailError` keeps `status`, `detail`, `isConfiguration`, `reason`.
 
 Callers in `routes/auth/login.tsx:202` and `lib/data/reminders.ts:105` are untouched. `magicLinkEmail` and `reminderEmail` are untouched.
 
+**Before starting:** the Google Cloud setup in the spec's "Setup, outside the code" is a prerequisite for Task 5 only. This task is written and tested with no credentials present — the console fallback covers local development.
+
 - [ ] **Step 1: Write the failing tests**
 
-Add to `lib/email_test.ts`. Keep every existing test in the file — `appUrl` and the three `EmailError` cases still pass unchanged.
+Add to `lib/email_test.ts`. Keep every existing test — `appUrl` and the three `EmailError` cases still pass unchanged.
+
+The file's existing `withEnv` takes a synchronous body. The send tests are async, so add an async twin beside it rather than changing the original, which three passing tests already use:
 
 ```ts
-import { parseSender } from "./email.ts";
+/** As `withEnv`, for bodies that await. */
+async function withEnvAsync(
+  vars: Record<string, string | undefined>,
+  body: () => Promise<void>,
+): Promise<void> {
+  const before = new Map<string, string | undefined>();
+  for (const name of Object.keys(vars)) before.set(name, Deno.env.get(name));
 
-Deno.test("a sender in Name <addr> form splits into Brevo's two fields", () => {
+  try {
+    for (const [name, value] of Object.entries(vars)) {
+      if (value === undefined) Deno.env.delete(name);
+      else Deno.env.set(name, value);
+    }
+    await body();
+  } finally {
+    for (const [name, value] of before) {
+      if (value === undefined) Deno.env.delete(name);
+      else Deno.env.set(name, value);
+    }
+  }
+}
+```
+
+Then the cases:
+
+```ts
+import {
+  buildMime,
+  encodeHeader,
+  parseSender,
+  sendEmail,
+} from "./email.ts";
+import { decodeBase64Url } from "@std/encoding/base64url";
+
+Deno.test("a sender in Name <addr> form splits into a name and an address", () => {
   assertEquals(parseSender("Smash Club <play@example.com>"), {
     name: "Smash Club",
     email: "play@example.com",
@@ -62,26 +98,58 @@ Deno.test("surrounding whitespace never reaches the provider", () => {
   });
 });
 
-Deno.test("an unset EMAIL_FROM names the variable rather than failing at Brevo", () => {
+Deno.test("an unset EMAIL_FROM names the variable rather than sending as the wrong address", () => {
   withEnv({ EMAIL_FROM: undefined }, () => {
-    // Brevo refuses any sender it has not verified, so a default here would
-    // fail with a message about verification rather than about configuration.
+    // Gmail silently rewrites a From it does not recognise as an alias of the
+    // authorising account, so a default here would be a wrong answer with no
+    // error attached.
     assertThrows(() => parseSender(), Error, "EMAIL_FROM");
   });
 });
 
-Deno.test("with no API key the message is logged instead of sent", async () => {
+Deno.test("an ASCII subject is left alone", () => {
+  // Encoding everything would be correct but unreadable in a mail log.
+  assertEquals(encodeHeader("Your Smash Club code"), "Your Smash Club code");
+});
+
+Deno.test("a non-ASCII subject is encoded rather than mangled", () => {
+  const encoded = encodeHeader("Café badminton");
+
+  assertStringIncludes(encoded, "=?UTF-8?B?");
+  assertStringIncludes(encoded, "?=");
+  // The raw character must not survive: headers are ASCII-only and a mail
+  // server is free to strip or replace anything else.
+  assertEquals(encoded.includes("é"), false);
+});
+
+Deno.test("the plain-text part precedes the HTML part", () => {
+  // Clients render the last part they understand, so this order is what makes
+  // HTML win where it is supported and text work where it is not.
+  const mime = buildMime({
+    to: "player@example.com",
+    subject: "Test",
+    html: "<p>Rich</p>",
+    text: "Plain",
+  });
+
+  assertEquals(mime.indexOf("text/plain") < mime.indexOf("text/html"), true);
+  assertStringIncludes(mime, "multipart/alternative");
+  assertStringIncludes(mime, "player@example.com");
+});
+
+Deno.test("with no refresh token the message is logged instead of sent", async () => {
   const lines: string[] = [];
   const realInfo = console.info;
   console.info = (...args: unknown[]) => void lines.push(args.join(" "));
 
   try {
-    Deno.env.delete("BREVO_API_KEY");
-    await sendEmail({
-      to: "player@example.com",
-      subject: "Test",
-      html: "<p>Test</p>",
-      text: "Test",
+    await withEnvAsync({ GMAIL_REFRESH_TOKEN: undefined }, async () => {
+      await sendEmail({
+        to: "player@example.com",
+        subject: "Test",
+        html: "<p>Test</p>",
+        text: "Test",
+      });
     });
   } finally {
     console.info = realInfo;
@@ -90,66 +158,125 @@ Deno.test("with no API key the message is logged instead of sent", async () => {
   assertStringIncludes(lines.join("\n"), "player@example.com");
 });
 
-Deno.test("Brevo's own refusal shape is read back", () => {
+Deno.test("a send posts base64url, which has no plus or slash in it", async () => {
+  const realFetch = globalThis.fetch;
+  let sentRaw = "";
+
+  globalThis.fetch = (input: string | URL | Request, init?: RequestInit) => {
+    const url = input.toString();
+
+    if (url.includes("oauth2")) {
+      return Promise.resolve(
+        Response.json({ access_token: "test-token", expires_in: 3600 }),
+      );
+    }
+
+    sentRaw = JSON.parse(init!.body as string).raw;
+    return Promise.resolve(Response.json({ id: "sent" }));
+  };
+
+  try {
+    await withEnvAsync({
+      GMAIL_CLIENT_ID: "id",
+      GMAIL_CLIENT_SECRET: "secret",
+      GMAIL_REFRESH_TOKEN: "refresh",
+      EMAIL_FROM: "Smash Club <play@example.com>",
+    }, async () => {
+      await sendEmail({
+        to: "player@example.com",
+        subject: "Test",
+        html: "<p>Test</p>",
+        text: "Test",
+      });
+    });
+  } finally {
+    globalThis.fetch = realFetch;
+  }
+
+  // Standard base64 fails here with an unhelpful parse error from Google.
+  assertEquals(sentRaw.includes("+"), false);
+  assertEquals(sentRaw.includes("/"), false);
+  assertStringIncludes(
+    new TextDecoder().decode(decodeBase64Url(sentRaw)),
+    "player@example.com",
+  );
+});
+
+Deno.test("a revoked refresh token reads as configuration, not as a network fault", () => {
+  // invalid_grant is what a revoked token and a consent screen left in Testing
+  // both look like, and the fix for either is in the Google Cloud console.
   const rejected = new EmailError(
     400,
     JSON.stringify({
-      code: "invalid_parameter",
-      message: "Sender email is not valid or not verified",
+      error: "invalid_grant",
+      error_description: "Token has been expired or revoked.",
     }),
   );
 
   assertEquals(rejected.isConfiguration, true);
-  assertStringIncludes(rejected.reason, "not verified");
+  assertStringIncludes(rejected.reason, "revoked");
 });
 ```
 
-Add `sendEmail` to the existing import from `./email.ts`.
+Note the fetch stub restores the real `fetch` in a `finally`. A test that leaves it replaced makes every later test in the file lie.
 
 - [ ] **Step 2: Run the tests and watch them fail**
 
 Run: `deno task test lib/email_test.ts`
-Expected: FAIL — `parseSender` is not exported from `lib/email.ts`.
+Expected: FAIL — `parseSender`, `encodeHeader` and `buildMime` are not exported from `lib/email.ts`.
 
 - [ ] **Step 3: Rewrite the transport**
 
-In `lib/email.ts`, replace the file header, the endpoint constant, `fromAddress`, `sendEmail`, and the `EmailError` doc comment.
+In `lib/email.ts`, replace the file header, the endpoint constant, `fromAddress`, and `sendEmail`.
 
 ```ts
 /**
- * Transactional email, wrapped so the rest of the app never touches Brevo
+ * Transactional email, wrapped so the rest of the app never touches Google
  * directly.
  *
- * With no BREVO_API_KEY set, messages are logged to the console instead of
- * sent — local development needs no third-party account, and tests never post
- * to the network.
+ * With no GMAIL_REFRESH_TOKEN set, messages are logged to the console instead
+ * of sent — local development needs no Google project, and tests never post to
+ * the network.
  *
- * Brevo rather than Resend because Brevo verifies a single sender address
- * without DNS, so mail reaches every player rather than only the account
- * owner. The cost is that the From domain is one whose DNS we do not control,
- * so DKIM does not align and some recipients will see this in spam. A domain
- * fixes that, and moving to one is a change to EMAIL_FROM alone.
+ * Mail is sent as the club's own Gmail account through Google's own servers,
+ * so the DKIM signature aligns with the From domain. A relay would have been
+ * one API key instead of an OAuth client, but it signs as itself while
+ * claiming a gmail.com From, and consumer Gmail scores that mismatch down —
+ * which would land sign-in codes in spam for a player base that is mostly on
+ * Gmail.
+ *
+ * The cost is a refresh token, which is a credential that can send as the club
+ * indefinitely. It lives in the environment and is never logged, including
+ * inside an EmailError.
  */
 
-const BREVO_ENDPOINT = "https://api.brevo.com/v3/smtp/email";
+import { encodeBase64Url } from "@std/encoding/base64url";
+import { formatFils } from "./domain/money.ts";
+import { formatGameTime } from "./domain/time.ts";
+
+const TOKEN_ENDPOINT = "https://oauth2.googleapis.com/token";
+const SEND_ENDPOINT =
+  "https://gmail.googleapis.com/gmail/v1/users/me/messages/send";
 ```
+
+Replace `fromAddress` with `parseSender`:
 
 ```ts
 /**
- * Splits `EMAIL_FROM` into the two fields Brevo asks for.
+ * Splits `EMAIL_FROM` into a display name and an address.
  *
- * There is deliberately no default. Brevo refuses any sender address the
- * account has not verified, so a fallback would be a value that always fails
- * with a message about verification — pointing at the wrong problem for
- * whoever is setting this up.
+ * There is deliberately no default. Gmail rewrites a From header it does not
+ * recognise as an alias of the authorising account, so a fallback would not
+ * fail — it would quietly send under a different address than the one
+ * configured, which is worse than refusing.
  */
 export function parseSender(
   value: string | undefined = Deno.env.get("EMAIL_FROM"),
 ): { name: string; email: string } {
   if (!value?.trim()) {
     throw new Error(
-      "EMAIL_FROM must be set to an address verified with Brevo, in the " +
-        'form "Smash Club <play@example.com>".',
+      "EMAIL_FROM must be set to the Gmail account that authorised " +
+        'GMAIL_REFRESH_TOKEN, in the form "Smash Club <club@gmail.com>".',
     );
   }
 
@@ -157,69 +284,168 @@ export function parseSender(
   if (!angled) return { name: "Smash Club", email: value.trim() };
 
   const name = angled[1]!.trim();
-  return {
-    name: name || "Smash Club",
-    email: angled[2]!.trim(),
+  return { name: name || "Smash Club", email: angled[2]!.trim() };
+}
+
+/**
+ * RFC 2047 for anything a header cannot carry as-is.
+ *
+ * Headers are ASCII. A player's name or a character pasted from a phone would
+ * otherwise be stripped or replaced somewhere between here and the inbox.
+ * Plain ASCII is left alone so an ordinary subject stays readable in a log.
+ */
+export function encodeHeader(value: string): string {
+  // deno-lint-ignore no-control-regex
+  if (!/[^\x00-\x7F]/.test(value)) return value;
+  return `=?UTF-8?B?${encodeBase64(new TextEncoder().encode(value))}?=`;
+}
+```
+
+`encodeHeader` needs standard base64, not base64url — RFC 2047 specifies the `B` encoding. Import both:
+
+```ts
+import { encodeBase64 } from "@std/encoding/base64";
+import { encodeBase64Url } from "@std/encoding/base64url";
+```
+
+Then the message builder and the two requests:
+
+```ts
+/**
+ * The RFC 2822 message Gmail sends verbatim.
+ *
+ * Text first and HTML second: a client renders the last part it understands,
+ * so this order is what makes HTML win where it is supported without losing
+ * the plain-text copy where it is not.
+ */
+export function buildMime(message: EmailMessage): string {
+  const sender = parseSender();
+  const boundary = `smash-${crypto.randomUUID()}`;
+  const body = (content: string) =>
+    encodeBase64(new TextEncoder().encode(content));
+
+  return [
+    `From: ${encodeHeader(sender.name)} <${sender.email}>`,
+    `To: ${message.to}`,
+    `Subject: ${encodeHeader(message.subject)}`,
+    "MIME-Version: 1.0",
+    `Content-Type: multipart/alternative; boundary="${boundary}"`,
+    "",
+    `--${boundary}`,
+    'Content-Type: text/plain; charset="UTF-8"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    body(message.text),
+    `--${boundary}`,
+    'Content-Type: text/html; charset="UTF-8"',
+    "Content-Transfer-Encoding: base64",
+    "",
+    body(message.html),
+    `--${boundary}--`,
+    "",
+  ].join("\r\n");
+}
+
+/**
+ * A live access token, minted from the refresh token and reused until it is
+ * nearly stale.
+ *
+ * Access tokens last an hour and the deployment holds only the refresh token,
+ * so without this cache every message would cost two requests. The minute of
+ * margin covers clock skew and the flight time of the send that follows.
+ */
+let cached: { token: string; expiresAt: number } | null = null;
+
+async function accessToken(): Promise<string> {
+  if (cached && Date.now() < cached.expiresAt) return cached.token;
+
+  const response = await fetch(TOKEN_ENDPOINT, {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: new URLSearchParams({
+      client_id: Deno.env.get("GMAIL_CLIENT_ID") ?? "",
+      client_secret: Deno.env.get("GMAIL_CLIENT_SECRET") ?? "",
+      refresh_token: Deno.env.get("GMAIL_REFRESH_TOKEN") ?? "",
+      grant_type: "refresh_token",
+    }),
+  });
+
+  if (!response.ok) {
+    // The body here describes the grant, never the credentials that were
+    // sent, so it is safe to carry into the error.
+    throw new EmailError(response.status, await response.text());
+  }
+
+  const granted = await response.json();
+  cached = {
+    token: granted.access_token,
+    expiresAt: Date.now() + (granted.expires_in - 60) * 1000,
   };
+
+  return cached.token;
 }
 
 export async function sendEmail(message: EmailMessage): Promise<void> {
-  const apiKey = Deno.env.get("BREVO_API_KEY");
-
-  if (!apiKey) {
+  if (!Deno.env.get("GMAIL_REFRESH_TOKEN")) {
     console.info(
       `\n[email] to=${message.to}\n[email] subject=${message.subject}\n${message.text}\n`,
     );
     return;
   }
 
-  const response = await fetch(BREVO_ENDPOINT, {
+  const response = await fetch(SEND_ENDPOINT, {
     method: "POST",
     headers: {
-      // Brevo authenticates on its own header, not on Authorization.
-      "api-key": apiKey,
+      "Authorization": `Bearer ${await accessToken()}`,
       "Content-Type": "application/json",
-      "Accept": "application/json",
     },
-    body: JSON.stringify({
-      sender: parseSender(),
-      to: [{ email: message.to }],
-      subject: message.subject,
-      htmlContent: message.html,
-      textContent: message.text,
-    }),
+    body: JSON.stringify({ raw: encodeBase64Url(buildMime(message)) }),
   });
 
-  // Brevo answers 201 on success, which `ok` already covers.
   if (!response.ok) {
-    const detail = await response.text();
-    throw new EmailError(response.status, detail);
+    throw new EmailError(response.status, await response.text());
   }
 }
 ```
 
-In `EmailError`, change the constructor message and the class comment:
+In `EmailError`, update the class comment and the constructor message, and teach `reason` the one case worth naming:
 
 ```ts
   constructor(status: number, detail: string) {
-    super(`Brevo rejected the message (${status}): ${detail}`);
+    super(`Gmail rejected the message (${status}): ${detail}`);
 ```
 
-The `reason` accessor already reads `parsed?.message`, which is the field Brevo returns alongside `code`. Leave it alone.
+In the `reason` accessor, before the existing `parsed?.message` lookup:
+
+```ts
+      // A refresh token that was revoked, or that expired because the OAuth
+      // consent screen was left in Testing, arrives as invalid_grant. That
+      // reads as an authentication bug and is really a configuration one, and
+      // the fix is in the Google Cloud console rather than in this code.
+      if (parsed?.error === "invalid_grant") {
+        return `${
+          parsed.error_description ?? "The refresh token is no longer valid"
+        } — re-authorise GMAIL_REFRESH_TOKEN, and check the OAuth consent screen is set to In production rather than Testing.`;
+      }
+```
+
+The existing fallback chain already reads `parsed?.error?.message`, which is the shape a send failure returns. Leave it.
 
 - [ ] **Step 4: Run the tests and watch them pass**
 
 Run: `deno task test lib/email_test.ts`
-Expected: PASS, all cases including the pre-existing `appUrl` and `EmailError` tests.
+Expected: PASS, including the pre-existing `appUrl` and `EmailError` tests.
 
 - [ ] **Step 5: Confirm no caller referenced the old variable**
 
-Run: `grep -rn "RESEND" --include="*.ts" --include="*.tsx" --include="*.md" . | grep -v node_modules`
-Expected: hits only in `docs/` and `README.md`. Any hit in `lib/`, `routes/` or `islands/` is a miss — fix it before committing.
+Run: `grep -rn "RESEND\|BREVO" --include="*.ts" --include="*.tsx" --include="*.md" . | grep -v node_modules`
+Expected: hits only in `docs/`. Any hit in `lib/`, `routes/` or `islands/` is a miss — fix it before committing.
 
 - [ ] **Step 6: Update the deployment docs**
 
-In `README.md`, rename `RESEND_API_KEY` to `BREVO_API_KEY` in the environment table and change the `EMAIL_FROM` row to say it is required and must be an address verified with Brevo. If the README documents Resend setup steps, replace them with: create a Brevo account, add the sender address under Senders, click the confirmation link Brevo emails to it, then generate an API key under SMTP & API.
+In `README.md`, replace the `RESEND_API_KEY` row with `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET` and `GMAIL_REFRESH_TOKEN`, and change the `EMAIL_FROM` row to say it is required and must name the Gmail account that authorised the refresh token.
+
+Reproduce the numbered setup list from the spec's "Setup, outside the code" section. Two points must survive the copy, because both fail silently: the consent screen has to be **In production** or refresh tokens expire after seven days, and the authorisation request needs `access_type=offline` with `prompt=consent` or Google returns no refresh token at all.
 
 - [ ] **Step 7: Run the full suite and commit**
 
@@ -227,17 +453,22 @@ In `README.md`, rename `RESEND_API_KEY` to `BREVO_API_KEY` in the environment ta
 deno task check && deno task test
 git add lib/email.ts lib/email_test.ts README.md
 git commit -m "$(cat <<'EOF'
-feat(email): send through Brevo so mail reaches every player
+feat(email): send through the Gmail API so mail reaches every player
 
 Resend's free tier delivers only to the account owner until a domain is
-verified, so nobody else could sign in. Brevo verifies a single sender
-address with a confirmation click and no DNS, which unblocks real
-players today.
+verified, so nobody else could sign in.
 
-EMAIL_FROM loses its default. Brevo refuses any sender it has not
-verified, so a default would fail with a message about verification
-rather than about configuration, pointing whoever is setting this up at
-the wrong problem.
+Sending as the club's own Gmail account through Google's servers means
+the DKIM signature aligns with the From domain. A relay would have been
+one API key rather than an OAuth client, but it signs as itself while
+claiming a gmail.com From, and consumer Gmail scores that mismatch down
+— which would put sign-in codes in spam for a player base that is
+mostly on Gmail.
+
+EMAIL_FROM loses its default. Gmail rewrites a From it does not
+recognise as an alias of the authorising account, so a default would not
+fail; it would quietly send under a different address than the one
+configured.
 
 Co-Authored-By: Claude Opus 5 <noreply@anthropic.com>
 EOF
@@ -1013,9 +1244,16 @@ As the player, replace the code on `/profile`. Scan the *old* screenshot. Expect
 
 - [ ] **Step 7: Send a real email**
 
-With `BREVO_API_KEY` and `EMAIL_FROM` set to the verified sender, request a sign-in code for an address that is not yours — a friend's phone.
+This is the step the Google Cloud setup in the spec is a prerequisite for. With `GMAIL_CLIENT_ID`, `GMAIL_CLIENT_SECRET`, `GMAIL_REFRESH_TOKEN` and `EMAIL_FROM` all set, request a sign-in code for an address that is not yours — a friend's phone.
 
-Confirm the code arrives, and **check the spam folder, not just the inbox**. Gmail-to-Gmail with an unaligned From domain is the weak case, and it is exactly the player base. If it lands in spam, that is the domain purchase becoming urgent, not a bug in this code.
+Confirm four things, because each fails differently:
+
+1. The code arrives **in the inbox**. Check spam anyway: this is the claim the whole transport choice was made for, and it is the only place it can be tested.
+2. The `From:` reads `Smash Club <smashclub.dxb@gmail.com>`. If it shows a different address, `EMAIL_FROM` does not match the authorising account and Gmail rewrote it silently.
+3. Open the message's "Show original" in Gmail. `DKIM: PASS` with `domain=gmail.com` is the alignment that made this worth the OAuth setup. Anything else means mail is going out through a path this design did not intend.
+4. Send a second message a few minutes later. It exercises the cached access token rather than a fresh one, which is the path every message after the first takes.
+
+Then leave it a week and send one more. A refresh token issued against a consent screen still in Testing expires after seven days, and this is the only way that failure surfaces before players hit it.
 
 - [ ] **Step 8: Commit anything the walkthrough turned up**
 
