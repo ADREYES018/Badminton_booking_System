@@ -61,8 +61,17 @@ checker flags.
 
 ## Status
 
-Phase 1 (foundation) is complete: magic-link auth, sessions, role guards,
-profiles with encrypted refund IBANs, the KV layer, and the PWA shell.
+Phases 1–4 are complete:
 
-Phases 2–5 — games and RSVP, payments, admin, QR check-in and stats — are
-described in `DECISIONS.md` and the build spec.
+- **Phase 1** — magic-link auth, sessions, role guards, profiles with encrypted
+  refund IBANs, the KV layer, and the PWA shell.
+- **Phase 2** — games, RSVP, guests and the waitlist.
+- **Phase 3** — the cutoff freeze, payments, reminders, refunds, match results
+  and attendance.
+- **Phase 4** — those last three in the UI: paying a share and settling a game,
+  reporting a result and confirming it, marking the roster, and the stats page
+  with the group leaderboard.
+
+**Phase 5** — QR check-in — is still outstanding, as is group management
+(deferred in Phase 2: the app seeds and uses a single club). Both are described
+in `DECISIONS.md` and the build spec.
