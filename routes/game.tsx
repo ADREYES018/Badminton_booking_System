@@ -35,6 +35,7 @@ import {
 import RsvpButton from "../islands/RsvpButton.tsx";
 import { hasBill, PaymentPanel } from "../components/PaymentPanel.tsx";
 import { ResultsPanel } from "../components/ResultsPanel.tsx";
+import { AttendanceChip, AttendanceToggle } from "../components/Attendance.tsx";
 import {
   CSRF_FIELD,
   csrfCookie,
@@ -109,71 +110,6 @@ function Stat(props: { label: string; children: ComponentChildren }) {
   );
 }
 
-/**
- * Present, absent, or not yet marked.
- *
- * Three states, not two: `attendedAt` alone cannot tell "nobody has marked
- * this player" apart from "marked as a no-show", and treating the absence of
- * a mark as a no-show would count every unmarked player against themselves.
- */
-function attendanceOf(signup: Signup): boolean | null {
-  if (signup.attendedAt !== undefined) return true;
-  if (signup.markedAbsentAt !== undefined) return false;
-  return null;
-}
-
-/**
- * An attendance mark, as everyone but the organizer sees it.
- *
- * An unmarked player renders nothing at all. "Not marked yet" is the normal
- * state before an organizer works through the roster, and labelling it would
- * read as a verdict.
- */
-function AttendanceChip(props: { signup: Signup }) {
-  const state = attendanceOf(props.signup);
-  if (state === null) return null;
-  return state
-    ? <Chip tone="success">Played</Chip>
-    : <Chip tone="neutral">No-show</Chip>;
-}
-
-/**
- * The organizer's attendance controls for one player.
- *
- * Both buttons always render, with the current state shown as active rather
- * than hidden, so a mis-mark can be corrected — which `setAttendance`
- * supports, moving the count between columns rather than adding to both.
- */
-function AttendanceToggle(
-  props: { signup: Signup; slug: string; csrf: string; name: string },
-) {
-  const state = attendanceOf(props.signup);
-
-  const button = (attended: boolean, label: string) => (
-    <form method="post" action={`/games/${props.slug}/attendance`}>
-      <input type="hidden" name={CSRF_FIELD} value={props.csrf} />
-      <input type="hidden" name="userId" value={props.signup.userId} />
-      <input type="hidden" name="attended" value={attended ? "1" : "0"} />
-      <Button
-        type="submit"
-        variant={state === attended ? "primary" : "ghost"}
-        class="px-4 py-2"
-        aria-pressed={state === attended}
-        aria-label={`Mark ${props.name} ${label.toLowerCase()}`}
-      >
-        {label}
-      </Button>
-    </form>
-  );
-
-  return (
-    <div class="flex gap-2 shrink-0">
-      {button(true, "Present")}
-      {button(false, "Absent")}
-    </div>
-  );
-}
-
 function RosterList(
   props: {
     title: string;
@@ -220,6 +156,7 @@ function RosterList(
                   signup={signup}
                   slug={props.attendance.slug}
                   csrf={props.attendance.csrf}
+                  csrfField={CSRF_FIELD}
                   name={user?.name ?? "this player"}
                 />
               )
