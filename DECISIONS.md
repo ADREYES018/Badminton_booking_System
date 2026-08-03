@@ -263,3 +263,58 @@ requested state against `attendedAt !== undefined`, so "mark absent" on a player
 nobody had marked yet compared `false === false` and returned early. Caught by
 the no-show test on its first run. Correcting a mark now moves the count between
 columns rather than adding to both.
+
+## Phase 4 — Payments, results, attendance and stats in the UI
+
+### The leaderboard is sorted in memory, not indexed
+
+`keys.leaderboard` was defined in Phase 1 and never written. It is now deleted.
+Keeping it would mean deleting the old sort-key entry and writing a new one
+atomically on every stats change, and a club is tens of players: a prefix scan
+and an in-memory sort cost nothing at that size, while an index that must stay
+consistent costs attention forever.
+
+`listStats` returns a group's records unsorted. Ordering and the five-match
+threshold live in the route, because they are presentation rules — a different
+screen may want a different order, and a data function that silently drops rows
+is hard to trust.
+
+### A rate with nothing recorded is a dash, not zero
+
+Show-up rate is `attended / (attended + noShow)` and is undefined when both are
+zero. Rendering that as 0% would count an organizer's unfinished paperwork
+against the player, which is the same mistake the three-state attendance model
+exists to avoid.
+
+Players below the qualifying threshold are listed as "still qualifying" rather
+than omitted. Being absent from a leaderboard with no explanation reads as a
+bug, and the fix costs one extra section.
+
+### The UI hides what the backend refuses
+
+Confirm and dispute controls render only for the losing side; attendance toggles
+and the settlement screen only for an organizer. None of that is the control.
+`confirmMatch` still rejects a winner who forges the POST, and every organizer
+route calls `requireOrganizer` against the game's own group — being an organizer
+somewhere is not being an organizer here. The visibility rules are a courtesy so
+people are not offered actions that will fail.
+
+Match ids are checked against the game named in the URL before being acted on.
+The slug decides whose permissions were verified, so a match id from elsewhere
+would otherwise be ruled on under the wrong game's context.
+
+### Bugs found while building this phase
+
+**Organizers could be locked out of their own group.** The shared `begin` helper
+seated every actor with `ensureMembership(kv, group.id, user.id)`, which
+defaults to the `player` role. Since that function only writes on first touch,
+an organizer whose first action was an RSVP got a player membership permanently,
+and `requireOrganizer` refused them thereafter. `organizerContext` had always
+passed the role; `begin` had not.
+
+**Payment actions were never audited.** `confirmPaid` and `refundPayment`
+returned a bare `Response` so they could redirect to the settlement screen
+rather than the game page. `act` treats a bare `Response` as a validation
+failure that changed nothing and skips the audit entry — so the two actions that
+move money left no record of who moved it. An outcome may now carry a `redirect`
+without giving up its entry.
