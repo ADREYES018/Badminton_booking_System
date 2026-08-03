@@ -15,8 +15,16 @@ an address you already own. Once verified, mail delivers to anyone.
 
 The tradeoff is real and is accepted: sending as a `gmail.com` address whose
 DNS we do not control means no SPF or DKIM alignment for that domain, so some
-recipients will see the mail in spam. Inbox placement cannot be verified from
-the codebase and must be tested against a real recipient.
+recipients will see the mail in spam. Brevo signs with its own DKIM, but the
+`From:` domain stays `gmail.com`, and consumer Gmail publishes `p=none` — mail
+is scored down rather than rejected. Gmail-to-Gmail is where that shows most,
+which is exactly the player base. Inbox placement cannot be verified from the
+codebase and must be tested against a real recipient's spam folder.
+
+A dedicated Gmail account sends first, with a purchased domain to follow.
+`EMAIL_FROM` is read at send time and nothing else in the app names the sender,
+so moving to the domain is a config change with no code change and no
+redeploy of logic.
 
 ### Scope
 
@@ -68,11 +76,27 @@ changes.
 
 ### Setup, outside the code
 
-1. Create a Brevo account
-2. Senders → verify `justinadrielr@gmail.com` via the confirmation email
-3. Generate an API key
-4. On Deno Deploy set `BREVO_API_KEY` and
-   `EMAIL_FROM="Smash Club <justinadrielr@gmail.com>"`
+Now, to unblock players:
+
+1. Create a dedicated Gmail account for the club — not the personal address, so
+   replies and bounces land somewhere separate and a spam flag never touches
+   personal mail
+2. Create a Brevo account
+3. Senders → add that address → click the confirmation link Brevo emails to it
+4. SMTP & API → generate an API key
+5. On Deno Deploy set `BREVO_API_KEY` and
+   `EMAIL_FROM="Smash Club <thatnewaddress@gmail.com>"`
+6. Send a real sign-in code to a phone that is not yours and check the spam
+   folder, not just the inbox
+
+Later, for deliverability:
+
+1. Buy a domain
+2. Brevo → Domains → add it, copy the DKIM and SPF records into DNS, wait for
+   verification
+3. Change `EMAIL_FROM` to `"Smash Club <noreply@yourdomain>"`
+
+Step 3 is the whole migration. No code changes.
 
 ## Part 2 — one permanent QR per player
 
