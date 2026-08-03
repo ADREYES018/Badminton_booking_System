@@ -33,11 +33,13 @@ import {
   viewerStateOf,
 } from "../components/GameCard.tsx";
 import RsvpButton from "../islands/RsvpButton.tsx";
+import { hasBill, PaymentPanel } from "../components/PaymentPanel.tsx";
 import {
   CSRF_FIELD,
   csrfCookie,
   HttpError,
   isSecureRequest,
+  loadGroupAccess,
   requireUser,
 } from "../lib/auth/middleware.ts";
 import { act, backToGame } from "./game_action.ts";
@@ -72,7 +74,7 @@ import {
   skillWarning,
 } from "../lib/domain/join_rules.ts";
 import { cleanText } from "../lib/domain/validate.ts";
-import type { Game, Signup, User } from "../lib/types.ts";
+import type { Game, PayoutDetails, Signup, User } from "../lib/types.ts";
 
 interface RosterMember {
   signup: Signup;
@@ -87,6 +89,10 @@ interface DetailProps {
   pending: RosterMember[];
   waitlisted: RosterMember[];
   csrf: string;
+  /** Where to send the money. Absent until an organizer fills it in. */
+  payout?: PayoutDetails;
+  /** Organizers see the settlement link and the attendance controls. */
+  isOrganizer: boolean;
   error?: string;
   notice?: string;
 }
@@ -363,6 +369,25 @@ function GameDetail(props: DetailProps) {
           )}
         </Card>
 
+        {hasBill(props.signup) && (
+          <PaymentPanel
+            signup={props.signup}
+            slug={game.slug}
+            csrf={props.csrf}
+            csrfField={CSRF_FIELD}
+            payout={props.payout}
+          />
+        )}
+
+        {props.isOrganizer && frozen && (
+          <a
+            href={`/organizer/games/${game.slug}/settlement`}
+            class="text-label font-bold text-primary hover:underline w-fit"
+          >
+            View settlement →
+          </a>
+        )}
+
         <ActionPanel {...props} />
 
         <Card class="flex flex-col gap-6">
@@ -423,9 +448,13 @@ export function gameRoute(app: App<State>) {
     sweepInBackground(kv, game);
 
     const url = new URL(ctx.req.url);
-    const [signup, roster] = await Promise.all([
+    // One read covers both: the group carries the payout details a player
+    // needs to transfer their share, and the access flag decides whether the
+    // organizer's controls render.
+    const [signup, roster, access] = await Promise.all([
       getSignup(kv, game.id, user.id),
       loadDetail(kv, game),
+      loadGroupAccess(ctx.state.auth, game.groupId),
     ]);
 
     const response = await ctx.render(
@@ -434,6 +463,8 @@ export function gameRoute(app: App<State>) {
         game={game}
         signup={signup}
         csrf={ctx.state.auth.csrfToken}
+        payout={access.group.payout}
+        isOrganizer={access.isOrganizer}
         error={url.searchParams.get("error") ?? undefined}
         notice={url.searchParams.get("notice") ?? undefined}
         {...roster}

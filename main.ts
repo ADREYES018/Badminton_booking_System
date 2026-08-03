@@ -18,7 +18,9 @@ import { verifyRoute } from "./routes/auth/verify.tsx";
 import { logoutRoute } from "./routes/auth/logout.ts";
 import { gamesRoute } from "./routes/games.tsx";
 import { gameRoute } from "./routes/game.tsx";
+import { gameActionRoutes } from "./routes/game_actions.tsx";
 import { organizerGameRoutes } from "./routes/organizer/games.tsx";
+import { settlementRoute } from "./routes/organizer/settlement.tsx";
 import { profileRoutes } from "./routes/profile.tsx";
 import { photoRoute } from "./routes/api/photo.ts";
 import { manifestRoute } from "./routes/api/manifest.ts";
@@ -56,7 +58,9 @@ gamesRoute(app);
 // Registered before /games/:slug so the organizer paths are not swallowed by
 // the slug pattern.
 organizerGameRoutes(app);
+settlementRoute(app);
 gameRoute(app);
+gameActionRoutes(app);
 profileRoutes(app);
 photoRoute(app);
 manifestRoute(app);

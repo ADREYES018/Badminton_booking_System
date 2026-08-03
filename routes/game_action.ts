@@ -70,7 +70,15 @@ export async function begin(ctx: ActionCtx): Promise<ActionContext> {
   if (!game) throw new HttpError(404, "That game could not be found");
 
   const group = await ensureDefaultGroup(kv, user.id);
-  await ensureMembership(kv, group.id, user.id);
+  // The seeded role matters: `ensureMembership` only writes on the first
+  // touch, so seating an organizer as a player here would deny them their own
+  // group's controls forever after. This mirrors `organizerContext`.
+  await ensureMembership(
+    kv,
+    group.id,
+    user.id,
+    user.role === "player" ? "player" : "organizer",
+  );
 
   return { user, kv, form, game };
 }

@@ -41,7 +41,10 @@ export type AuditAction =
   | "signup.promotion_confirmed"
   | "signup.promotion_expired"
   | "guest.added"
-  | "guest.removed";
+  | "guest.removed"
+  | "match.reported"
+  | "match.confirmed"
+  | "match.disputed";
 
 export interface AuditInput {
   actorId: string;
