@@ -145,25 +145,33 @@ club.
 
 ### The roster check replaces expiry
 
-`routes/game_actions.tsx`, the `POST /games/:slug/checkin` handler. Three gates
+`routes/game_actions.tsx`, the `POST /games/:slug/checkin` handler. Four gates
 in order:
 
 1. `requireOrganizer(auth, game.groupId)` — unchanged, and still the primary
    access control. The POST comes from the organizer's browser, so a player
    replaying their own code cannot mark themselves.
-2. `verifyCheckinToken(token)` — a forged or superseded code is rejected.
-3. **New:** load the signup for `(game.id, claim.userId)` and reject unless its
-   status is `confirmed`, with "That player is not on the roster."
+2. `verifyCheckinToken(token)` — a forged code is rejected. It proves the
+   server minted this code for this player at this version, and nothing more.
+3. **New:** load the user and reject unless `claim.version` equals
+   `checkinVersionOf(player)`. Verification alone cannot do this — the token is
+   self-describing, so a superseded code still verifies as its own old version.
+   Only the stored record says which version is current. A user id with no
+   record is refused here too, rather than checked in anonymously.
+4. **New:** load the signup for `(game.id, claim.userId)` and reject unless its
+   status is `confirmed`, with "… is not on the roster for this game."
 
-Gate 3 is the one doing the work that expiry used to do. Previously the game
+Gate 4 is the one doing the work that expiry used to do. Previously the game
 travelled inside the token, so a code could not be presented at a game it was
 not minted for. Now that it can be, the roster is what refuses it.
+
+Gate 3 is what makes "replace my code" mean anything.
 
 ### Residual risk, stated plainly
 
 A permanent code is worth screenshotting and players will screenshot it.
 
-With gate 3 in place, a leaked code only helps someone already confirmed on
+With gate 4 in place, a leaked code only helps someone already confirmed on
 that game's roster — it lets a no-show be marked present by a friend at the
 door. Nothing short of expiry closes that, and expiry is what this phase
 deliberately removes. Version bump is the remedy for a code known to have
@@ -204,5 +212,11 @@ renders whatever the server replies.
 `routes/checkin_test.ts`:
 
 - a confirmed player's code marks attendance
-- a club member's code for a game they never signed up to is rejected
+- a club member's code for a game they never signed up to is rejected — this
+  case already exists and keeps its name; what changes is that the roster now
+  refuses it rather than the game inside the token
+- a code the player has since replaced is rejected
 - the player page renders exactly one code regardless of game count
+
+The existing "a code minted for another game is refused" is deleted. A token
+carries no game, so there is no such thing to refuse.
