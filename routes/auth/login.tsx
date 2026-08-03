@@ -23,7 +23,7 @@ import {
   rateLimit,
 } from "../../lib/auth/session.ts";
 import { isValidEmail, normalizeEmail } from "../../lib/domain/validate.ts";
-import { magicLinkEmail, sendEmail } from "../../lib/email.ts";
+import { EmailError, magicLinkEmail, sendEmail } from "../../lib/email.ts";
 
 function LoginPage(
   props: { csrf: string; error?: string; sent?: string; next?: string },
@@ -167,10 +167,20 @@ export function loginRoutes(app: App<State>) {
       await sendEmail(magicLinkEmail(email, token, next));
     } catch (error) {
       console.error("Failed to send magic link", error);
+
+      // A misconfigured deployment cannot send to anyone, and "please try
+      // again" invites someone to retry forever without ever learning why.
+      // The provider's own words are what the person setting this up needs,
+      // and they describe the sending account rather than the recipient, so
+      // showing them tells an outsider nothing about who has an account here.
+      const detail = error instanceof EmailError && error.isConfiguration
+        ? ` The mail provider said: ${error.reason}`
+        : "";
+
       return ctx.render(
         <LoginPage
           csrf={csrf}
-          error="We could not send that email. Please try again."
+          error={`We could not send that email.${detail}`}
           next={next}
         />,
       );

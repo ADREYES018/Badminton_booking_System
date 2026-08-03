@@ -1,5 +1,5 @@
-import { assertEquals, assertThrows } from "@std/assert";
-import { appUrl } from "./email.ts";
+import { assertEquals, assertStringIncludes, assertThrows } from "@std/assert";
+import { appUrl, EmailError } from "./email.ts";
 
 /** Restores whatever the surrounding environment had, including unset. */
 function withEnv(
@@ -43,4 +43,28 @@ Deno.test("a deployment without APP_URL refuses rather than sending dead links",
     // QR payload against an origin nobody can reach.
     assertThrows(() => appUrl(), Error, "APP_URL must be set");
   });
+});
+
+Deno.test("a provider refusal carries its own explanation", () => {
+  const rejected = new EmailError(
+    403,
+    JSON.stringify({
+      statusCode: 403,
+      message:
+        "You can only send testing emails to your own email address (you@example.com).",
+    }),
+  );
+
+  assertEquals(rejected.isConfiguration, true);
+  assertStringIncludes(rejected.reason, "your own email address");
+});
+
+Deno.test("a provider outage is not treated as a misconfiguration", () => {
+  const down = new EmailError(502, "Bad Gateway");
+  assertEquals(down.isConfiguration, false);
+});
+
+Deno.test("a refusal that is not JSON still says something", () => {
+  const odd = new EmailError(422, "Unprocessable Entity");
+  assertEquals(odd.reason, "Unprocessable Entity");
 });

@@ -72,9 +72,45 @@ export async function sendEmail(message: EmailMessage): Promise<void> {
 
   if (!response.ok) {
     const detail = await response.text();
-    throw new Error(
-      `Resend rejected the message (${response.status}): ${detail}`,
-    );
+    throw new EmailError(response.status, detail);
+  }
+}
+
+/**
+ * A refusal from the mail provider, carrying enough to act on.
+ *
+ * The distinction that matters is whose fault it is. A 4xx means this
+ * deployment is misconfigured — an unverified sending domain, a bad key, a
+ * recipient the account is not allowed to write to — and the person setting it
+ * up needs to read the provider's own words, not "please try again", which
+ * they could follow forever without learning anything. Anything else is the
+ * provider having a bad day and is worth retrying.
+ */
+export class EmailError extends Error {
+  readonly status: number;
+  readonly detail: string;
+
+  constructor(status: number, detail: string) {
+    super(`Resend rejected the message (${status}): ${detail}`);
+    this.status = status;
+    this.detail = detail;
+  }
+
+  /** True when the deployment is at fault rather than the network. */
+  get isConfiguration(): boolean {
+    return this.status >= 400 && this.status < 500;
+  }
+
+  /** The provider's own explanation, when it gave one. */
+  get reason(): string {
+    try {
+      const parsed = JSON.parse(this.detail);
+      const message = parsed?.message ?? parsed?.error?.message;
+      if (typeof message === "string" && message.trim()) return message.trim();
+    } catch {
+      // Not JSON. The raw body is still better than nothing.
+    }
+    return this.detail.slice(0, 300) || `HTTP ${this.status}`;
   }
 }
 
