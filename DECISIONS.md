@@ -374,3 +374,87 @@ Every other action in the app is a form POST that redirects. The scan is not:
 reloading the page between players would drop the camera stream and the
 organizer's place in the queue. A refused code returns a message rather than an
 error status page, because a stale screenshot at a door is an ordinary event.
+
+## Phase 6 — More than one club
+
+### The club is in the URL, not in the session
+
+`/g/smash-club/games` rather than a "current club" the session remembers.
+
+The deciding case is how this app is actually shared: an organizer pastes a link
+into a WhatsApp group. With the club held in the session, that link resolves
+against whatever club the _reader_ last visited — so two people opening the same
+message can land on different rosters, and neither has any way to tell. Money
+and attendance hang off those pages.
+
+The cost is a bigger diff and longer URLs. The gain is that a link means the
+same thing to everyone who opens it, which is the only property that makes a
+link worth sharing.
+
+`/games`, `/stats` and `/checkin` survive as redirects rather than being
+deleted: old links keep working, and the bottom navigation can stay
+club-agnostic. They resolve by membership — straight through for someone in one
+club, to the club list for anyone in none or several.
+
+Navigation inside a club page points at that club rather than at the bare paths.
+Going through a redirect that resolves against membership would, for someone in
+two clubs, quietly move them to the other one.
+
+### A game page stays at /games/:gameSlug
+
+Game slugs are already unique across the whole app and the record carries its
+own `groupId`, so putting the club in that URL would have bought nothing and
+broken every link already shared.
+
+### Nothing joins anyone to a club
+
+Auto-join was the single-club shortcut: opening any page seated you in the one
+club. With two, it would have quietly put everyone in whichever they browsed
+first.
+
+Membership now takes an explicit act — an invite link, an organizer adding a
+known address, or a request the organizer approves. Three ways in rather than
+one, because they fail in different situations: an invite link works for someone
+with no account yet, adding by email works when the organizer knows exactly who
+they mean, and a request works when the player found the club first.
+
+### A club is private in who plays, not in whether it exists
+
+A signed-in non-member sees a club's public games and is offered the way in. The
+alternative — 404 for anyone not already a member — hides the club from exactly
+the person an invite link is about to send there, and makes a shared game link a
+dead end.
+
+Per-game visibility is unchanged and still means what it did: an unlisted game
+404s for a non-member, because keeping it off the listing is a promise that
+handing it to anyone who guesses the slug would not honour.
+
+### An invite is marked spent rather than deleted
+
+Magic-link tokens are consumed by deletion, which is right for a login: the link
+dies with the session it opened and nobody taps it twice.
+
+An invite lives in a chat thread. Deleting the record on redemption makes a
+spent link indistinguishable from a forged one, so the second person to tap it
+is told the link is invalid — which reads as a bug in the app rather than as
+someone else having taken the place. The record is kept, marked, and left to
+expire on its own.
+
+An invite never grants organizer rights. Promotion is a deliberate act on the
+members page, never something a forwarded link can do.
+
+### The owner's rights cannot be removed
+
+Not by another organizer, not by themselves. Every other role and block is
+reversible by someone; a club whose last organizer has been demoted is not.
+
+### Guarding a game by its club, not just by a role
+
+The organizer handlers found a game by slug and checked organizer rights — but
+against the club in the URL, while the game was fetched globally. With one club
+those were the same thing. With two, an organizer of one club could reach
+another club's roster and money by naming their own club in the URL.
+
+Every organizer route now checks that the game belongs to the club being
+administered, and answers 404 rather than 403: a game in someone else's club is
+not theirs to know about.

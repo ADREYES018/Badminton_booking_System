@@ -49,6 +49,25 @@ tools/          One-off scripts (key generation, icon rendering)
 it builds a key array, so a schema change is one file plus whatever the type
 checker flags.
 
+## Routes
+
+```
+/groups                          Your clubs; create one
+/invite/:token                   Redeem an invite link
+
+/g/:club/games                   That club's games
+/g/:club/stats                   Its leaderboard
+/g/:club/checkin                 Your code, or the organizer's scanner
+/g/:club/members                 Roster, roles, blocks, invites  (organizer)
+/g/:club/settings                Name, cutoff, payout details    (organizer)
+/g/:club/organizer/games/…       Create, edit, cancel, settle    (organizer)
+
+/games/:game                     One game. Slugs are globally unique, and the
+/games/:game/…                   record names its own club.
+
+/games  /stats  /checkin         Redirect into your club, for older links
+```
+
 ## Conventions
 
 - **Money is integer fils.** 1 AED = 100 fils. No float goes near a total.
@@ -58,6 +77,11 @@ checker flags.
 - **Secondary indexes store a pointer**, never a copy of the record.
 - **Authorization is checked server-side on every route.** A hidden button is
   not access control.
+- **A club lives in the URL.** Every club-scoped screen is `/g/:club/…`, so a
+  link shared into a chat means the same thing to everyone who opens it. Rights
+  are read per club: being an organizer somewhere grants nothing anywhere else.
+- **Nobody joins a club by looking at it.** Membership comes from an invite
+  link, an organizer adding a known address, or a request an organizer approves.
 
 ## Status
 
@@ -74,6 +98,7 @@ Phases 1–5 are complete:
 - **Phase 5** — QR check-in: a player shows a signed, short-lived code and the
   organizer scans it at the door, with the manual toggles on the same screen for
   whoever's phone is flat.
-
-Group management remains deferred (Phase 2: the app seeds and uses a single
-club). It is described in `DECISIONS.md` and the build spec.
+- **Phase 6** — more than one club: every screen lives under `/g/:club/`,
+  membership takes an explicit act (an invite link, an organizer adding an
+  address, or a request they approve), and organizers get a roster and settings
+  to run a club with.
