@@ -164,6 +164,44 @@ export async function nextSequence(
   return claimed;
 }
 
+/**
+ * Runs a `withRetry` mutation and returns the record as it stands afterwards.
+ *
+ * `withRetry` reports three outcomes and every caller that mutates one record
+ * has to tell them apart the same way: `null` means the callback decided there
+ * was nothing to do, a truthy result means this call committed, and anything
+ * else means the commit never landed. All three end up reading the record back,
+ * because the caller wants the current state either way — a no-op still has to
+ * return what is already there.
+ *
+ * Reading back is deliberate rather than returning the value the callback
+ * built: on a no-op the callback built nothing, and on a successful commit
+ * another writer may already have moved the record on. The read-back is the
+ * honest answer to "what does this look like now".
+ *
+ * `onMissing` is thrown when the record cannot be read back at all, which is a
+ * genuine failure however the mutation went.
+ */
+export async function mutateRecord<T>(
+  kv: Deno.Kv,
+  key: Deno.KvKey,
+  mutate: (kv: Deno.Kv) => Promise<
+    { op: Deno.AtomicOperation; result: true } | null
+  >,
+  onMissing = "That did not go through.",
+): Promise<T> {
+  const committed = await withRetry(kv, mutate);
+
+  const updated = await getRecord<T>(kv, key);
+  if (updated.value === null) throw new ConflictError(onMissing);
+
+  // A no-op returns the record untouched; a failed commit is an error.
+  if (committed === null) return updated.value;
+  if (!committed) throw new ConflictError(onMissing);
+
+  return updated.value;
+}
+
 /** Collects a list query into an array, migrating each record on read. */
 export async function listRecords<T>(
   kv: Deno.Kv,

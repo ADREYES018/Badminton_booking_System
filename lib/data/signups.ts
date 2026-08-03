@@ -45,6 +45,7 @@ import {
   ConflictError,
   getRecord,
   listRecords,
+  mutateRecord,
   nextSequence,
   withRetry,
 } from "../kv/kv.ts";
@@ -896,46 +897,44 @@ export async function markPaid(
   gameId: string,
   userId: string,
 ): Promise<Signup> {
-  const result = await withRetry(kv, async (kv) => {
-    const entry = await getRecord<Signup>(kv, keys.signup(gameId, userId));
-    const signup = entry.value;
-    if (!signup) throw new SignupError("You are not signed up for this game.");
-    if (signup.status !== "confirmed") {
-      throw new SignupError("Only confirmed players have a share to pay.");
-    }
-    if (signup.owedFils === undefined) {
-      throw new SignupError(
-        "The roster has not closed yet, so there is nothing to pay.",
-      );
-    }
-    // Already confirmed by the organizer: a later claim must not undo that.
-    if (signup.payment === "paid" || signup.payment === "refunded") {
-      return null;
-    }
+  return await mutateRecord<Signup>(
+    kv,
+    keys.signup(gameId, userId),
+    async (kv) => {
+      const entry = await getRecord<Signup>(kv, keys.signup(gameId, userId));
+      const signup = entry.value;
+      if (!signup) {
+        throw new SignupError(
+          "You are not signed up for this game.",
+        );
+      }
+      if (signup.status !== "confirmed") {
+        throw new SignupError("Only confirmed players have a share to pay.");
+      }
+      if (signup.owedFils === undefined) {
+        throw new SignupError(
+          "The roster has not closed yet, so there is nothing to pay.",
+        );
+      }
+      // Already confirmed by the organizer: a later claim must not undo that.
+      if (signup.payment === "paid" || signup.payment === "refunded") {
+        return null;
+      }
 
-    return {
-      op: kv.atomic().check(entry).set(
-        keys.signup(gameId, userId),
-        {
-          ...signup,
-          payment: "marked_paid",
-          paidMarkedAt: nowIso(),
-          updatedAt: nowIso(),
-        } satisfies Signup,
-      ),
-      result: true,
-    };
-  });
-
-  if (result === null) {
-    const current = await getSignup(kv, gameId, userId);
-    if (current) return current;
-  }
-  if (!result) throw new ConflictError("That did not go through.");
-
-  const updated = await getSignup(kv, gameId, userId);
-  if (!updated) throw new ConflictError("That did not go through.");
-  return updated;
+      return {
+        op: kv.atomic().check(entry).set(
+          keys.signup(gameId, userId),
+          {
+            ...signup,
+            payment: "marked_paid",
+            paidMarkedAt: nowIso(),
+            updatedAt: nowIso(),
+          } satisfies Signup,
+        ),
+        result: true,
+      };
+    },
+  );
 }
 
 /**
@@ -951,40 +950,34 @@ export async function confirmPaid(
   userId: string,
   confirmedBy: string,
 ): Promise<Signup> {
-  const result = await withRetry(kv, async (kv) => {
-    const entry = await getRecord<Signup>(kv, keys.signup(gameId, userId));
-    const signup = entry.value;
-    if (!signup) throw new SignupError("That player is not on this roster.");
-    if (signup.owedFils === undefined) {
-      throw new SignupError("The roster has not closed yet.");
-    }
-    if (signup.payment === "paid") return null;
+  return await mutateRecord<Signup>(
+    kv,
+    keys.signup(gameId, userId),
+    async (kv) => {
+      const entry = await getRecord<Signup>(kv, keys.signup(gameId, userId));
+      const signup = entry.value;
+      if (!signup) throw new SignupError("That player is not on this roster.");
+      if (signup.owedFils === undefined) {
+        throw new SignupError("The roster has not closed yet.");
+      }
+      if (signup.payment === "paid") return null;
 
-    const now = nowIso();
-    return {
-      op: kv.atomic().check(entry).set(
-        keys.signup(gameId, userId),
-        {
-          ...signup,
-          payment: "paid",
-          paidConfirmedAt: now,
-          paidConfirmedBy: confirmedBy,
-          updatedAt: now,
-        } satisfies Signup,
-      ),
-      result: true,
-    };
-  });
-
-  if (result === null) {
-    const current = await getSignup(kv, gameId, userId);
-    if (current) return current;
-  }
-  if (!result) throw new ConflictError("That did not go through.");
-
-  const updated = await getSignup(kv, gameId, userId);
-  if (!updated) throw new ConflictError("That did not go through.");
-  return updated;
+      const now = nowIso();
+      return {
+        op: kv.atomic().check(entry).set(
+          keys.signup(gameId, userId),
+          {
+            ...signup,
+            payment: "paid",
+            paidConfirmedAt: now,
+            paidConfirmedBy: confirmedBy,
+            updatedAt: now,
+          } satisfies Signup,
+        ),
+        result: true,
+      };
+    },
+  );
 }
 
 /**
@@ -1003,39 +996,34 @@ export async function refundPayment(
   gameId: string,
   userId: string,
 ): Promise<Signup> {
-  const result = await withRetry(kv, async (kv) => {
-    const entry = await getRecord<Signup>(kv, keys.signup(gameId, userId));
-    const signup = entry.value;
-    if (!signup) throw new SignupError("That player is not on this roster.");
-    if (signup.payment === "refunded") return null;
-    if (signup.payment !== "paid") {
-      throw new SignupError(
-        "Only a confirmed payment can be refunded.",
-      );
-    }
+  return await mutateRecord<Signup>(
+    kv,
+    keys.signup(gameId, userId),
+    async (kv) => {
+      const entry = await getRecord<Signup>(kv, keys.signup(gameId, userId));
+      const signup = entry.value;
+      if (!signup) throw new SignupError("That player is not on this roster.");
+      if (signup.payment === "refunded") return null;
+      if (signup.payment !== "paid") {
+        throw new SignupError(
+          "Only a confirmed payment can be refunded.",
+        );
+      }
 
-    return {
-      op: kv.atomic().check(entry).set(
-        keys.signup(gameId, userId),
-        {
-          ...signup,
-          payment: "refunded",
-          updatedAt: nowIso(),
-        } satisfies Signup,
-      ),
-      result: true,
-    };
-  });
-
-  if (result === null) {
-    const current = await getSignup(kv, gameId, userId);
-    if (current) return current;
-  }
-  if (!result) throw new ConflictError("That refund did not go through.");
-
-  const updated = await getSignup(kv, gameId, userId);
-  if (!updated) throw new ConflictError("That refund did not go through.");
-  return updated;
+      return {
+        op: kv.atomic().check(entry).set(
+          keys.signup(gameId, userId),
+          {
+            ...signup,
+            payment: "refunded",
+            updatedAt: nowIso(),
+          } satisfies Signup,
+        ),
+        result: true,
+      };
+    },
+    "That refund did not go through.",
+  );
 }
 
 /**

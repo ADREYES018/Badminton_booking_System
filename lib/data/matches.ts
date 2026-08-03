@@ -23,7 +23,13 @@
 
 import { ulid } from "@std/ulid";
 import { keys } from "../kv/keys.ts";
-import { ConflictError, getRecord, listRecords, withRetry } from "../kv/kv.ts";
+import {
+  ConflictError,
+  getRecord,
+  listRecords,
+  mutateRecord,
+  withRetry,
+} from "../kv/kv.ts";
 import type { Match, PlayerStats, Signup } from "../types.ts";
 import { nowIso } from "../domain/time.ts";
 import { SignupError } from "./signups.ts";
@@ -43,56 +49,60 @@ export async function setAttendance(
   attended: boolean,
   options: { groupId?: string } = {},
 ): Promise<Signup> {
-  // Whether this replaces an earlier mark, captured from the read that the
-  // winning attempt committed against.
+  // Captured from the read that the winning attempt committed against.
+  // `wasMarked` says whether this replaces an earlier mark; `changed` says
+  // whether anything moved at all. A no-op previously still ran a bump that
+  // happened to cancel itself out — skipping it outright is the same result
+  // without the write.
   let wasMarked = false;
+  let changed = false;
 
-  const result = await withRetry(kv, async (kv) => {
-    const entry = await getRecord<Signup>(kv, keys.signup(gameId, userId));
-    const signup = entry.value;
-    if (!signup) throw new SignupError("That player is not on this roster.");
-    if (signup.status !== "confirmed") {
-      throw new SignupError("Only confirmed players can be marked present.");
-    }
+  const signup = await mutateRecord<Signup>(
+    kv,
+    keys.signup(gameId, userId),
+    async (kv) => {
+      const entry = await getRecord<Signup>(kv, keys.signup(gameId, userId));
+      const signup = entry.value;
+      if (!signup) throw new SignupError("That player is not on this roster.");
+      if (signup.status !== "confirmed") {
+        throw new SignupError("Only confirmed players can be marked present.");
+      }
 
-    // Three states, not two: present, absent, and not yet marked. Comparing
-    // against `attendedAt` alone would make "mark absent" a no-op for a
-    // player nobody had marked yet — the commonest case there is.
-    const current = signup.attendedAt !== undefined
-      ? true
-      : signup.markedAbsentAt !== undefined
-      ? false
-      : null;
-    if (current === attended) return null;
-    wasMarked = current !== null;
+      // Three states, not two: present, absent, and not yet marked. Comparing
+      // against `attendedAt` alone would make "mark absent" a no-op for a
+      // player nobody had marked yet — the commonest case there is.
+      const current = signup.attendedAt !== undefined
+        ? true
+        : signup.markedAbsentAt !== undefined
+        ? false
+        : null;
+      if (current === attended) return null;
+      wasMarked = current !== null;
+      changed = true;
 
-    const now = nowIso();
-    return {
-      op: kv.atomic().check(entry).set(
-        keys.signup(gameId, userId),
-        {
-          ...signup,
-          attendedAt: attended ? now : undefined,
-          markedAbsentAt: attended ? undefined : now,
-          updatedAt: now,
-        } satisfies Signup,
-      ),
-      result: true,
-    };
-  });
-
-  const updated = await getRecord<Signup>(kv, keys.signup(gameId, userId));
-  if (!updated.value) throw new ConflictError("That did not go through.");
-  if (result === null) return updated.value;
-  if (!result) throw new ConflictError("That did not go through.");
+      const now = nowIso();
+      return {
+        op: kv.atomic().check(entry).set(
+          keys.signup(gameId, userId),
+          {
+            ...signup,
+            attendedAt: attended ? now : undefined,
+            markedAbsentAt: attended ? undefined : now,
+            updatedAt: now,
+          } satisfies Signup,
+        ),
+        result: true,
+      };
+    },
+  );
 
   // Only on a real change, and only when the caller knows the group — the
   // counters are per-group and there is nothing sensible to write without it.
-  if (options.groupId) {
+  if (changed && options.groupId) {
     await bumpAttendance(kv, options.groupId, userId, attended, wasMarked);
   }
 
-  return updated.value;
+  return signup;
 }
 
 /**
@@ -224,42 +234,48 @@ export async function confirmMatch(
   matchId: string,
   confirmedBy: string,
 ): Promise<Match> {
-  const result = await withRetry(kv, async (kv) => {
-    const entry = await getRecord<Match>(kv, keys.match(matchId));
-    const match = entry.value;
-    if (!match) throw new SignupError("That result no longer exists.");
-    if (match.status === "confirmed") return null;
-    if (match.status === "rejected") {
-      throw new SignupError("That result was already disputed.");
-    }
-    if (!losers(match).includes(confirmedBy)) {
-      throw new SignupError(
-        "Only a player on the losing side can confirm a result.",
-      );
-    }
+  // Whether this call is the one that confirmed, as opposed to finding it
+  // already confirmed — stats may only move once.
+  let confirmedHere = false;
 
-    return {
-      op: kv.atomic().check(entry).set(
-        keys.match(matchId),
-        {
-          ...match,
-          status: "confirmed",
-          resolvedBy: confirmedBy,
-          resolvedAt: nowIso(),
-        } satisfies Match,
-      ),
-      result: true,
-    };
-  });
+  const updated = await mutateRecord<Match>(
+    kv,
+    keys.match(matchId),
+    async (kv) => {
+      const entry = await getRecord<Match>(kv, keys.match(matchId));
+      const match = entry.value;
+      if (!match) throw new SignupError("That result no longer exists.");
+      if (match.status === "confirmed") return null;
+      if (match.status === "rejected") {
+        throw new SignupError("That result was already disputed.");
+      }
+      if (!losers(match).includes(confirmedBy)) {
+        throw new SignupError(
+          "Only a player on the losing side can confirm a result.",
+        );
+      }
+      confirmedHere = true;
 
-  const updated = await getRecord<Match>(kv, keys.match(matchId));
-  if (!updated.value) throw new ConflictError("That did not go through.");
+      return {
+        op: kv.atomic().check(entry).set(
+          keys.match(matchId),
+          {
+            ...match,
+            status: "confirmed",
+            resolvedBy: confirmedBy,
+            resolvedAt: nowIso(),
+          } satisfies Match,
+        ),
+        result: true,
+      };
+    },
+  );
 
   // Stats move only on the commit that actually confirmed, so a duplicate
   // call cannot count one win twice.
-  if (result === true) await applyMatchToStats(kv, updated.value);
+  if (confirmedHere) await applyMatchToStats(kv, updated);
 
-  return updated.value;
+  return updated;
 }
 
 /** Disputes a reported result. A rejected match never reaches the stats. */
@@ -268,7 +284,7 @@ export async function rejectMatch(
   matchId: string,
   rejectedBy: string,
 ): Promise<Match> {
-  const result = await withRetry(kv, async (kv) => {
+  return await mutateRecord<Match>(kv, keys.match(matchId), async (kv) => {
     const entry = await getRecord<Match>(kv, keys.match(matchId));
     const match = entry.value;
     if (!match) throw new SignupError("That result no longer exists.");
@@ -293,12 +309,6 @@ export async function rejectMatch(
       result: true,
     };
   });
-
-  const updated = await getRecord<Match>(kv, keys.match(matchId));
-  if (!updated.value) throw new ConflictError("That did not go through.");
-  if (result === null) return updated.value;
-  if (!result) throw new ConflictError("That did not go through.");
-  return updated.value;
 }
 
 function emptyStats(groupId: string, userId: string): PlayerStats {
