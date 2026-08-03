@@ -36,6 +36,8 @@ import RsvpButton from "../islands/RsvpButton.tsx";
 import { hasBill, PaymentPanel } from "../components/PaymentPanel.tsx";
 import { ResultsPanel } from "../components/ResultsPanel.tsx";
 import { AttendanceChip, AttendanceToggle } from "../components/Attendance.tsx";
+import { CheckinCode } from "../components/CheckinCode.tsx";
+import { mintCheckinToken } from "../lib/domain/checkin.ts";
 import {
   CSRF_FIELD,
   csrfCookie,
@@ -97,6 +99,8 @@ interface DetailProps {
   /** Organizers see the settlement link and the attendance controls. */
   isOrganizer: boolean;
   matches: Match[];
+  /** Minted per request for a confirmed player once the cutoff has passed. */
+  checkinToken?: string;
   error?: string;
   notice?: string;
 }
@@ -394,6 +398,8 @@ function GameDetail(props: DetailProps) {
           )}
         </Card>
 
+        {props.checkinToken && <CheckinCode token={props.checkinToken} />}
+
         {hasBill(props.signup) && (
           <PaymentPanel
             signup={props.signup}
@@ -504,6 +510,14 @@ export function gameRoute(app: App<State>) {
       listMatchesForGame(kv, game.id),
     ]);
 
+    // A code is only worth showing to someone who has a seat and a game about
+    // to start. Minted per request because it expires within ten minutes.
+    const checkinToken = signup?.status === "confirmed" &&
+        isPastCutoff(game.startUtc, game.cutoffHours) &&
+        game.status !== "cancelled"
+      ? await mintCheckinToken(game.id, user.id)
+      : undefined;
+
     const response = await ctx.render(
       <GameDetail
         user={user}
@@ -513,6 +527,7 @@ export function gameRoute(app: App<State>) {
         payout={access.group.payout}
         isOrganizer={access.isOrganizer}
         matches={matches}
+        checkinToken={checkinToken}
         error={url.searchParams.get("error") ?? undefined}
         notice={url.searchParams.get("notice") ?? undefined}
         {...roster}
