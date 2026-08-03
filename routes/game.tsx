@@ -4,11 +4,14 @@
  * All actions are plain form POSTs that redirect. That is the source of
  * truth: it works with JavaScript disabled, survives a double submit, and
  * cannot leave the client and the server disagreeing about who has a seat.
- * `islands/RsvpButton.tsx` layers optimistic feedback on top of exactly these
- * endpoints without replacing them.
+ * `islands/RsvpButton.tsx` layers feedback on top of exactly these endpoints
+ * without replacing them.
  *
  * Errors are carried back on the query string rather than rendered from the
  * POST, so a refresh after an error re-reads the game instead of resubmitting.
+ *
+ * The payment, results and attendance actions live in `game_actions.tsx` and
+ * share the `act` helper from `game_action.ts`.
  */
 
 import type { App } from "fresh";
@@ -36,8 +39,8 @@ import {
   HttpError,
   isSecureRequest,
   requireUser,
-  verifyCsrf,
 } from "../lib/auth/middleware.ts";
+import { act, backToGame } from "./game_action.ts";
 import { getGameBySlug } from "../lib/data/games.ts";
 import {
   addGuest,
@@ -48,13 +51,9 @@ import {
   leaveGame,
   loadRoster,
   removeGuest,
-  SignupError,
 } from "../lib/data/signups.ts";
 import { getUser } from "../lib/data/users.ts";
-import { ensureDefaultGroup, ensureMembership } from "../lib/data/groups.ts";
 import { sweepInBackground } from "../lib/data/sweep.ts";
-import { audit, type AuditAction } from "../lib/data/audit.ts";
-import { clientIp } from "../lib/auth/middleware.ts";
 import {
   capacityOf,
   displaySplit,
@@ -413,15 +412,6 @@ async function loadDetail(
   return { confirmed, pending, waitlisted };
 }
 
-/** Redirect carrying a message, so a refresh never resubmits the action. */
-function backToGame(slug: string, params: Record<string, string> = {}) {
-  const query = new URLSearchParams(params).toString();
-  return new Response(null, {
-    status: 303,
-    headers: { location: `/games/${slug}${query ? `?${query}` : ""}` },
-  });
-}
-
 export function gameRoute(app: App<State>) {
   app.get("/games/:slug", async (ctx) => {
     const user = requireUser(ctx.state.auth);
@@ -455,76 +445,6 @@ export function gameRoute(app: App<State>) {
     );
     return response;
   });
-
-  /**
-   * Shared prologue for every action: authenticate, verify CSRF, load the
-   * game, and make sure the player is a member of the club.
-   */
-  async function begin(ctx: {
-    req: Request;
-    params: Record<string, string | undefined>;
-    state: State;
-  }) {
-    const user = requireUser(ctx.state.auth);
-    const kv = ctx.state.auth.kv;
-    const form = await ctx.req.formData();
-
-    if (!verifyCsrf(ctx.req, form.get(CSRF_FIELD)?.toString() ?? null)) {
-      throw new HttpError(403, "That form expired. Please try again.");
-    }
-
-    const game = await getGameBySlug(kv, ctx.params.slug!);
-    if (!game) throw new HttpError(404, "That game could not be found");
-
-    const group = await ensureDefaultGroup(kv, user.id);
-    await ensureMembership(kv, group.id, user.id);
-
-    return { user, kv, form, game };
-  }
-
-  /**
-   * Runs one RSVP action: perform it, flush any queue effects, record the
-   * audit entry, and redirect with the resulting message.
-   *
-   * Every action shares this shape, including the `SignupError` catch. That
-   * catch is the reason this is one helper rather than five copies — a
-   * `SignupError` is a refusal the player can act on and must come back as a
-   * readable message, whereas anything else is a bug and has to keep
-   * propagating to the error handler. Getting that distinction wrong in one
-   * copy out of five is exactly the kind of thing that goes unnoticed.
-   */
-  async function act(
-    ctx: {
-      req: Request;
-      params: Record<string, string | undefined>;
-      state: State;
-    },
-    run: (
-      context: { user: User; kv: Deno.Kv; form: FormData; game: Game },
-    ) => Promise<{ action: AuditAction; notice: string } | Response>,
-  ): Promise<Response> {
-    const context = await begin(ctx);
-
-    try {
-      const outcome = await run(context);
-      // A validation failure returns its own redirect and records nothing.
-      if (outcome instanceof Response) return outcome;
-
-      await audit(context.kv, {
-        actorId: context.user.id,
-        action: outcome.action,
-        targetId: context.game.id,
-        groupId: context.game.groupId,
-        ip: clientIp(ctx.req),
-      });
-      return backToGame(context.game.slug, { notice: outcome.notice });
-    } catch (error) {
-      if (error instanceof SignupError) {
-        return backToGame(context.game.slug, { error: error.message });
-      }
-      throw error;
-    }
-  }
 
   app.post(
     "/games/:slug/join",
