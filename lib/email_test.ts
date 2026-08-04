@@ -6,8 +6,40 @@ import {
   EmailError,
   encodeHeader,
   parseSender,
+  paymentClaimedEmail,
   sendEmail,
 } from "./email.ts";
+import type { Game } from "./types.ts";
+
+/** The fields the templates actually read. */
+function testGame(): Game {
+  return {
+    v: 2,
+    id: "g1",
+    groupId: "grp1",
+    slug: "sunday-x1",
+    title: "Sunday Doubles",
+    venue: { name: "Al Quoz Courts", address: "Street 4, Al Quoz" },
+    startUtc: "2026-08-09T14:00:00.000Z",
+    endUtc: "2026-08-09T16:00:00.000Z",
+    courts: 2,
+    courtMode: "fixed",
+    playersPerCourt: 4,
+    courtStatus: "reserved",
+    pricePerPlayerFils: 4500,
+    maxGuestsPerPlayer: 1,
+    visibility: "public",
+    cutoffHours: 48,
+    status: "open",
+    confirmedCount: 4,
+    pendingCount: 0,
+    waitlistCount: 0,
+    guestCount: 0,
+    createdBy: "u1",
+    createdAt: "2026-08-01T00:00:00.000Z",
+    updatedAt: "2026-08-01T00:00:00.000Z",
+  };
+}
 
 /** Restores whatever the surrounding environment had, including unset. */
 function withEnv(
@@ -239,4 +271,53 @@ Deno.test("a revoked refresh token reads as configuration, not as a network faul
 
   assertEquals(rejected.isConfiguration, true);
   assertStringIncludes(rejected.reason, "revoked");
+});
+
+Deno.test("the payment notice names the player, the amount and the game", () => {
+  withEnv({ APP_URL: "https://smash.example" }, () => {
+    const message = paymentClaimedEmail(
+      "organizer@example.com",
+      testGame(),
+      "Rana",
+      4500,
+    );
+
+    assertEquals(message.to, "organizer@example.com");
+    assertStringIncludes(message.subject, "Rana");
+    assertStringIncludes(message.subject, "AED 45");
+    assertStringIncludes(message.subject, "Sunday Doubles");
+    // The link has to reach the game, since confirming happens there.
+    assertStringIncludes(message.html, "https://smash.example/games/sunday-x1");
+    assertStringIncludes(message.text, "https://smash.example/games/sunday-x1");
+  });
+});
+
+Deno.test("the payment notice says the money is not confirmed yet", () => {
+  withEnv({ APP_URL: "https://smash.example" }, () => {
+    // An organizer who reads a claim as settled and skips the statement is the
+    // failure the two-step confirmation exists to prevent.
+    const message = paymentClaimedEmail(
+      "organizer@example.com",
+      testGame(),
+      "Rana",
+      4500,
+    );
+
+    assertStringIncludes(message.text, "Nothing is settled until you confirm");
+    assertStringIncludes(message.html, "their word, not the bank");
+  });
+});
+
+Deno.test("a player name that would break the markup is escaped", () => {
+  withEnv({ APP_URL: "https://smash.example" }, () => {
+    const message = paymentClaimedEmail(
+      "organizer@example.com",
+      testGame(),
+      '<script>alert("x")</script>',
+      4500,
+    );
+
+    assertEquals(message.html.includes("<script>"), false);
+    assertStringIncludes(message.html, "&lt;script&gt;");
+  });
 });

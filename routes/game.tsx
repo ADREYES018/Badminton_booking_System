@@ -33,6 +33,7 @@ import {
   viewerStateOf,
 } from "../components/GameCard.tsx";
 import RsvpButton from "../islands/RsvpButton.tsx";
+import PaymentDialog from "../islands/PaymentDialog.tsx";
 import { hasBill, PaymentPanel } from "../components/PaymentPanel.tsx";
 import { ResultsPanel } from "../components/ResultsPanel.tsx";
 import { AttendanceChip, AttendanceToggle } from "../components/Attendance.tsx";
@@ -85,6 +86,7 @@ import {
   skillWarning,
 } from "../lib/domain/join_rules.ts";
 import { cleanText } from "../lib/domain/validate.ts";
+import { mapsUrl } from "../lib/domain/venue.ts";
 import type { Game, Match, PayoutDetails, Signup, User } from "../lib/types.ts";
 
 interface RosterMember {
@@ -116,6 +118,12 @@ interface DetailProps {
   matches: Match[];
   /** Minted per request for a confirmed player once the cutoff has passed. */
   checkinToken?: string;
+  /**
+   * Raises the payment dialog, set only on the redirect that follows taking a
+   * seat. A reload drops it, so the prompt appears once rather than every time
+   * the player opens the game.
+   */
+  promptPayment?: boolean;
   error?: string;
   notice?: string;
 }
@@ -402,10 +410,21 @@ function GameDetail(props: DetailProps) {
 
         <Card class="flex flex-col gap-5">
           <dl class="grid grid-cols-2 gap-4">
-            <Stat label="Venue">{game.venue.name}</Stat>
-            <Stat label="Courts">
-              {game.courts} × {game.playersPerCourt} players
+            <Stat label="Venue">
+              <a
+                href={mapsUrl(game.venue)}
+                target="_blank"
+                rel="noopener noreferrer"
+                class="text-primary hover:underline"
+              >
+                {game.venue.name}
+              </a>
             </Stat>
+            {
+              /* Players per court is how capacity is computed, not something a
+                player needs told — the seat count is already on the bar. */
+            }
+            <Stat label="Courts">{game.courts}</Stat>
             <Stat label="Price per player">
               {formatFils(game.pricePerPlayerFils)}
             </Stat>
@@ -414,9 +433,14 @@ function GameDetail(props: DetailProps) {
             </Stat>
           </dl>
 
-          <p class="text-label-sm text-on-surface-variant">
-            {game.venue.address}
-          </p>
+          <a
+            href={mapsUrl(game.venue)}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="text-label-sm text-on-surface-variant hover:text-primary transition-colors w-fit"
+          >
+            {game.venue.address} — open in Maps
+          </a>
 
           <ProgressBar
             value={seatsTaken(game)}
@@ -443,6 +467,17 @@ function GameDetail(props: DetailProps) {
             csrf={props.csrf}
             csrfField={CSRF_FIELD}
             payout={props.payout}
+          />
+        )}
+
+        {props.promptPayment && props.signup && (
+          <PaymentDialog
+            owed={formatFils(amountOwed(props.signup, game))}
+            slug={game.slug}
+            csrf={props.csrf}
+            csrfField={CSRF_FIELD}
+            payout={props.payout}
+            alreadyMarked={props.signup.payment !== "unpaid"}
           />
         )}
 
@@ -571,6 +606,7 @@ export function gameRoute(app: App<State>) {
         unlocked={unlocked}
         matches={matches}
         checkinToken={checkinToken}
+        promptPayment={url.searchParams.get("pay") === "1"}
         error={url.searchParams.get("error") ?? undefined}
         notice={url.searchParams.get("notice") ?? undefined}
         {...roster}
@@ -598,8 +634,19 @@ export function gameRoute(app: App<State>) {
         const result = await joinGame(kv, game.id, user);
         await flush(kv, result.effects);
 
+        // `pay=1` is what raises the payment dialog on the page they land on.
+        // It rides on the redirect rather than being inferred from the notice
+        // text, and only for a seat actually taken — a waitlisted player owes
+        // nothing until they are promoted and accept.
         return result.outcome === "confirmed"
-          ? { action: "signup.joined", notice: "You are in. See you on court." }
+          ? {
+            action: "signup.joined",
+            notice: "You are in. See you on court.",
+            redirect: backToGame(game.slug, {
+              notice: "You are in. See you on court.",
+              pay: "1",
+            }),
+          }
           : {
             action: "signup.waitlisted",
             notice:
@@ -629,9 +676,15 @@ export function gameRoute(app: App<State>) {
     (ctx) =>
       act(ctx, async ({ user, kv, game }) => {
         await confirmPromotion(kv, game.id, user.id);
+        // Accepting an offered seat is the same event as joining, as far as
+        // owing money goes, so it raises the same dialog.
         return {
           action: "signup.promotion_confirmed",
           notice: "Your spot is confirmed.",
+          redirect: backToGame(game.slug, {
+            notice: "Your spot is confirmed.",
+            pay: "1",
+          }),
         };
       }),
   );

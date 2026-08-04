@@ -93,15 +93,17 @@ export function PaymentPanel(props: PaymentPanelProps) {
             <Button type="submit" fullWidth>I have paid</Button>
           </form>
           <p class="text-label-sm text-on-surface-variant">
-            Pay before the game. Transfer the amount, then tell us here — the
-            organizer confirms it once it lands.
+            Pay before the game. Tapping this tells the organizer you have sent
+            it — send them the receipt too if you have one, since they confirm
+            it against the account.
           </p>
         </>
       )}
 
       {signup.payment === "marked_paid" && (
         <p class="text-body-md text-on-surface-variant">
-          You marked this paid. Waiting for the organizer to confirm it arrived.
+          You marked this paid and the organizer has been told. If it has been a
+          while, send them the receipt — they confirm it against the account.
         </p>
       )}
 

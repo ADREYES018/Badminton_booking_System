@@ -383,6 +383,54 @@ export function reminderEmail(
   };
 }
 
+/**
+ * Tells the organizer a player says they have paid.
+ *
+ * Money moves by bank transfer outside the app, so nothing here can see it
+ * arrive — this is the player's word, and it exists so the organizer knows to
+ * go and look. That distinction is carried in the wording rather than softened:
+ * an organizer who reads this as "paid" and skips the statement is exactly the
+ * failure the two-step confirmation was built to avoid.
+ *
+ * Sent to the club's own payout contact rather than to every organizer, since
+ * the account holder is who can actually see the transfer land.
+ */
+export function paymentClaimedEmail(
+  to: string,
+  game: import("./types.ts").Game,
+  playerName: string,
+  owedFils: number,
+): EmailMessage {
+  const url = new URL(`/games/${game.slug}`, appUrl()).toString();
+  const amount = formatFils(owedFils);
+  const subject = `${playerName} says they paid ${amount} for ${game.title}`;
+  const lead =
+    `${playerName} marked their share of ${game.title} as paid. Check the ` +
+    `account, then confirm it on the game page so their bill is settled.`;
+
+  return {
+    to,
+    subject,
+    html: layout(
+      "A player says they have paid",
+      `<p style="font-size:16px;line-height:1.6;margin:0 0 8px;">${
+        escapeHtml(lead)
+      }</p>
+       ${button(url, "Confirm the payment")}
+       <p style="font-size:13px;color:#444934;margin:0;">Nothing is settled until you confirm it — this is their word, not the bank's.</p>`,
+    ),
+    text: [
+      subject,
+      "",
+      lead,
+      "",
+      url,
+      "",
+      "Nothing is settled until you confirm it.",
+    ].join("\n"),
+  };
+}
+
 /** WhatsApp deep link, used instead of the paid Business API. */
 export function whatsappLink(phoneE164: string, message: string): string {
   const number = phoneE164.replace(/\D/g, "");

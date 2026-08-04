@@ -27,6 +27,10 @@ import {
 } from "../lib/data/signups.ts";
 import { audit } from "../lib/data/audit.ts";
 import { getUser } from "../lib/data/users.ts";
+import { getGroup } from "../lib/data/groups.ts";
+import { paymentClaimedEmail, sendEmail } from "../lib/email.ts";
+import { amountOwed } from "../lib/domain/money.ts";
+import type { Game, Signup, User } from "../lib/types.ts";
 import {
   CheckinError,
   checkinVersionOf,
@@ -39,6 +43,47 @@ import {
   reportMatch,
   setAttendance,
 } from "../lib/data/matches.ts";
+
+/**
+ * Tells the organizer a player says they have paid.
+ *
+ * Deliberately not awaited into the player's response, and deliberately never
+ * throwing: the claim is already recorded in KV by the time this runs, and a
+ * mail provider having a bad minute must not turn a successful payment claim
+ * into an error the player sees and retries.
+ *
+ * Goes to the group owner, who is the account holder — a second organizer can
+ * see the claim on the settlement screen, but only the owner can look at the
+ * statement it needs checking against.
+ */
+async function notifyOrganizerOfPayment(
+  kv: Deno.Kv,
+  game: Game,
+  player: User,
+  signup: Signup,
+): Promise<void> {
+  try {
+    const group = await getGroup(kv, game.groupId);
+    if (!group) return;
+
+    const owner = await getUser(kv, group.ownerId);
+    if (!owner?.email) return;
+
+    // A player paying for their own game would be telling themselves.
+    if (owner.id === player.id) return;
+
+    await sendEmail(
+      paymentClaimedEmail(
+        owner.email,
+        game,
+        player.name,
+        amountOwed(signup, game),
+      ),
+    );
+  } catch (error) {
+    console.error(`Payment notice failed for game ${game.id}`, error);
+  }
+}
 
 /** Redirect back to the organizer's settlement screen for this game. */
 function backToSettlement(
@@ -65,10 +110,13 @@ export function gameActionRoutes(app: App<State>) {
     "/games/:slug/paid",
     (ctx) =>
       act(ctx, async ({ user, kv, game }) => {
-        await markPaid(kv, game.id, user.id);
+        const signup = await markPaid(kv, game.id, user.id);
+        await notifyOrganizerOfPayment(kv, game, user, signup);
         return {
           action: "signup.payment_marked",
-          notice: "Thanks — the organizer will confirm it once it lands.",
+          notice:
+            "Thanks — tell the organizer you have sent it, and they will " +
+            "confirm it once it lands.",
         };
       }),
   );

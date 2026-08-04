@@ -12,6 +12,7 @@ import { handleRouteError } from "./lib/auth/error_middleware.ts";
 import { getKv } from "./lib/kv/kv.ts";
 import { startQueueListener } from "./lib/queue/dispatch.ts";
 
+import AppWrapper from "./routes/_app.tsx";
 import { indexRoute } from "./routes/index.tsx";
 import { loginRoutes } from "./routes/auth/login.tsx";
 import { verifyRoute } from "./routes/auth/verify.tsx";
@@ -35,6 +36,17 @@ export interface State {
 }
 
 export const app = new App<State>();
+
+/**
+ * The HTML document every page renders inside.
+ *
+ * Registered by hand because routes are. File-based routing would pick
+ * `routes/_app.tsx` up on its own, but this app registers each route
+ * explicitly — and without this call Fresh emits its own minimal head, which
+ * silently drops the viewport tag and leaves every phone laying the site out
+ * at 980px and scaling it down.
+ */
+app.appWrapper(AppWrapper);
 
 app.use(staticFiles());
 

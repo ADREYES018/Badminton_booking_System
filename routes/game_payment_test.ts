@@ -109,6 +109,45 @@ Deno.test("a player marking their share paid records a claim, not a confirmation
   );
 });
 
+Deno.test("taking a seat lands the player on the payment prompt", async () => {
+  // Players pay up front, so the transfer details have to arrive while they
+  // are still looking at their phone rather than waiting in a panel they
+  // scroll past.
+  const { game } = await seedGame(kv, {
+    courts: 1,
+    playersPerCourt: 4,
+    pricePerPlayerFils: 3000,
+  });
+  const player = await seedPlayer(kv);
+  const auth = await signIn(player);
+
+  const response = await post(`/games/${game.slug}/join`, auth);
+  await response.body?.cancel();
+
+  assertEquals(response.status, 303);
+  assertStringIncludes(response.headers.get("location") ?? "", "pay=1");
+});
+
+Deno.test("joining the waitlist does not prompt for payment", async () => {
+  // A waitlisted player holds no seat and owes nothing yet.
+  const { game } = await seedGame(kv, { courts: 1, playersPerCourt: 1 });
+  const seated = await seedPlayer(kv);
+  await joinGame(kv, game.id, seated);
+
+  const waiting = await seedPlayer(kv);
+  const response = await post(
+    `/games/${game.slug}/join`,
+    await signIn(waiting),
+  );
+  await response.body?.cancel();
+
+  assertEquals(response.status, 303);
+  assertEquals(
+    (response.headers.get("location") ?? "").includes("pay=1"),
+    false,
+  );
+});
+
 Deno.test("a player can pay before the roster freezes", async () => {
   // Players pay up front, and a fixed price means there is a real figure to
   // pay against while the roster is still open.

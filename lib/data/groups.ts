@@ -198,6 +198,33 @@ export async function listGroupsForUser(
   return groups.filter((group): group is Group => group !== null);
 }
 
+/**
+ * The clubs this user may post a game into.
+ *
+ * Owning a club and holding the organizer role in one are both enough, and
+ * they are not the same thing — an owner is seated as an organizer when the
+ * club is created, but a second organizer is only ever the role. Membership
+ * alone is not, which is the one distinction that still matters now that
+ * playing needs no membership at all.
+ */
+export async function listGroupsOrganizedBy(
+  kv: Deno.Kv,
+  userId: string,
+  limit = 50,
+): Promise<Group[]> {
+  const groups = await listGroupsForUser(kv, userId, limit);
+
+  const organized = await Promise.all(
+    groups.map(async (group) => {
+      if (group.ownerId === userId) return group;
+      const membership = await getMembership(kv, group.id, userId);
+      return membership?.role === "organizer" ? group : null;
+    }),
+  );
+
+  return organized.filter((group): group is Group => group !== null);
+}
+
 export async function getMembership(
   kv: Deno.Kv,
   groupId: string,

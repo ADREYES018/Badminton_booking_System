@@ -21,6 +21,7 @@ import { requireUser, resolveGroupAccess } from "../lib/auth/middleware.ts";
 import { isProfileComplete } from "../lib/data/users.ts";
 import { listAllOpenGames, listOpenGames } from "../lib/data/games.ts";
 import { getSignup } from "../lib/data/signups.ts";
+import { listGroupsOrganizedBy } from "../lib/data/groups.ts";
 import { sweepInBackground } from "../lib/data/sweep.ts";
 import type { Game, Signup } from "../lib/types.ts";
 
@@ -179,6 +180,14 @@ export function gamesRoute(app: App<State>) {
 
     if (!isProfileComplete(user)) return ctx.redirect("/profile/setup");
 
+    // A game is posted into a club, so the button needs one to aim at. Anyone
+    // organizing somewhere goes straight to the form; anyone else is sent to
+    // make a club first, which is the step that turns them into an organizer.
+    const organizing = await listGroupsOrganizedBy(kv, user.id);
+    const newGameHref = organizing[0]
+      ? `/g/${organizing[0].slug}/organizer/games/new`
+      : "/groups";
+
     const games = await listAllOpenGames(kv);
     const entries: Listed[] = await Promise.all(
       games.map(async (game) => ({
@@ -195,13 +204,18 @@ export function gamesRoute(app: App<State>) {
     return ctx.render(
       <Page user={user} nav="games">
         <div class="flex flex-col gap-8">
-          <div>
-            <h1 class="text-headline-lg font-headline text-on-surface">
-              Games
-            </h1>
-            <p class="text-body-md text-on-surface-variant mt-1">
-              Everything coming up. Join any of them.
-            </p>
+          <div class="flex items-start justify-between gap-4">
+            <div>
+              <h1 class="text-headline-lg font-headline text-on-surface">
+                Games
+              </h1>
+              <p class="text-body-md text-on-surface-variant mt-1">
+                Everything coming up. Join any of them.
+              </p>
+            </div>
+            <LinkButton href={newGameHref} variant="primary">
+              New game
+            </LinkButton>
           </div>
 
           <Section
@@ -218,9 +232,12 @@ export function gamesRoute(app: App<State>) {
           {entries.length === 0 && (
             <EmptyState title="No games yet">
               <p>
-                Once anyone posts a game it will appear here with its venue,
-                cost and remaining spots.
+                Nothing is on. Post the first one and it will show up here with
+                its venue, cost and remaining spots.
               </p>
+              <div class="mt-6 flex justify-center">
+                <LinkButton href={newGameHref}>Post a game</LinkButton>
+              </div>
             </EmptyState>
           )}
         </div>

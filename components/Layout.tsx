@@ -99,8 +99,11 @@ export function BottomNav(props: { active?: NavKey; groupSlug?: string }) {
   return (
     <nav
       aria-label="Main"
+      // Tighter on a phone, where `gap-6` and `px-6` squeezed "Check in" onto
+      // two lines and pushed the bar wider than the labels needed.
       class="fixed bottom-6 left-1/2 -translate-x-1/2 z-50 bg-surface-lowest rounded-full
-             shadow-float px-6 py-3 flex items-center gap-6 max-w-[92vw] pb-safe"
+             shadow-float px-3 sm:px-6 py-3 flex items-center gap-2 sm:gap-6
+             max-w-[92vw] pb-safe"
     >
       {NAV_ITEMS.map((item) => {
         const active = props.active === item.key;
@@ -110,7 +113,10 @@ export function BottomNav(props: { active?: NavKey; groupSlug?: string }) {
             href={navHref(item, props.groupSlug)}
             aria-current={active ? "page" : undefined}
             class={cx(
-              "flex flex-col items-center justify-center gap-0.5 px-2 py-1 rounded-lg transition-colors",
+              // `whitespace-nowrap` keeps "Check in" on one line; without it a
+              // narrow phone breaks it after "Check" and the bar grows a row.
+              "flex flex-col items-center justify-center gap-0.5 px-2 py-1",
+              "rounded-lg transition-colors whitespace-nowrap",
               active
                 ? "text-primary"
                 : "text-on-surface-variant hover:text-primary",
@@ -169,9 +175,18 @@ export function Page(
   return (
     <div class="min-h-dvh flex flex-col">
       <AppHeader user={props.user} groupSlug={props.groupSlug} />
+      {
+        /*
+        The bottom padding clears the floating nav, which is out of flow and
+        would otherwise sit on top of whatever the page ends with. It has to
+        cover the bar's height, its `bottom-6` offset and the home indicator
+        on a phone, so the safe-area inset is added rather than assumed.
+      */
+      }
       <main
         class={cx(
-          "flex-1 w-full max-w-[1200px] mx-auto px-5 md:px-10 pt-8 pb-32",
+          "flex-1 w-full max-w-[1200px] mx-auto px-5 md:px-10 pt-8",
+          "pb-[calc(9rem+env(safe-area-inset-bottom))]",
           props.class,
         )}
       >

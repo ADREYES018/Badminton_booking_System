@@ -134,6 +134,33 @@ Deno.test("the games list spans every club, not just one", async () => {
   assertStringIncludes(body, second.title);
 });
 
+Deno.test("the games list offers an organizer their own new-game form", async () => {
+  const { organizer, groupId } = await seedGame(kv);
+  const withPhone = await updateUser(kv, organizer.id, {
+    phone: "+971500000009",
+  });
+  const group = (await listGroupsForUser(kv, organizer.id))
+    .find((g) => g.id === groupId);
+
+  const response = await get("/games", await signIn(withPhone));
+  const body = await response.text();
+
+  assertEquals(response.status, 200);
+  assertStringIncludes(body, `/g/${group!.slug}/organizer/games/new`);
+});
+
+Deno.test("someone organizing nothing is pointed at making a club first", async () => {
+  // Posting a game needs a club to post it into, and making one is the step
+  // that turns a player into an organizer.
+  const player = await seedComplete("no-club");
+
+  const response = await get("/games", await signIn(player));
+  const body = await response.text();
+
+  assertEquals(response.status, 200);
+  assertStringIncludes(body, 'href="/groups"');
+});
+
 Deno.test("creating a club seats the creator as its organizer", async () => {
   const founder = await seedComplete("founder");
   const auth = await signIn(founder);

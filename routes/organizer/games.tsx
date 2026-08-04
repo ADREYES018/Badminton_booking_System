@@ -10,9 +10,11 @@
  */
 
 import type { App } from "fresh";
+import type { ComponentChildren } from "preact";
 import type { State } from "../../main.ts";
 import { Page } from "../../components/Layout.tsx";
 import { Alert, Button, Card, Field, Select } from "../../components/ui.tsx";
+import GameTimeFields from "../../islands/GameTimeFields.tsx";
 import {
   assertOrganizer,
   clientIp,
@@ -75,6 +77,37 @@ export function utcToDubaiLocal(iso: string): string {
   return shifted.toISOString().slice(0, 16);
 }
 
+/**
+ * One group of related fields.
+ *
+ * The form asks for twelve things, which as a flat column reads as a wall and
+ * gives no sense of how much is left. Grouping them into four named cards
+ * turns it into four small decisions — what and where, when, how big, who —
+ * and lets a heading carry the explanation that would otherwise be a hint
+ * repeated on every field inside it.
+ */
+function Section(
+  props: {
+    title: string;
+    description?: string;
+    children: ComponentChildren;
+  },
+) {
+  return (
+    <Card class="flex flex-col gap-5">
+      <div class="flex flex-col gap-1">
+        <h2 class="text-body-lg font-bold text-on-surface">{props.title}</h2>
+        {props.description && (
+          <p class="text-label-sm text-on-surface-variant">
+            {props.description}
+          </p>
+        )}
+      </div>
+      {props.children}
+    </Card>
+  );
+}
+
 function GameForm(props: FormProps) {
   const { game, groupSlug, values = {} } = props;
   const editing = game !== undefined;
@@ -97,16 +130,19 @@ function GameForm(props: FormProps) {
 
         {props.error && <Alert tone="error">{props.error}</Alert>}
 
-        <Card>
-          <form
-            method="post"
-            action={editing
-              ? `/g/${groupSlug}/organizer/games/${game.slug}`
-              : `/g/${groupSlug}/organizer/games`}
-            class="flex flex-col gap-5"
-          >
-            <input type="hidden" name={CSRF_FIELD} value={props.csrf} />
+        <form
+          method="post"
+          action={editing
+            ? `/g/${groupSlug}/organizer/games/${game.slug}`
+            : `/g/${groupSlug}/organizer/games`}
+          class="flex flex-col gap-5"
+        >
+          <input type="hidden" name={CSRF_FIELD} value={props.csrf} />
 
+          <Section
+            title="What and where"
+            description="The three things a player reads first."
+          >
             <Field
               label="Title"
               name="title"
@@ -132,29 +168,35 @@ function GameForm(props: FormProps) {
               maxLength={200}
               value={field("venueAddress", game?.venue.address ?? "")}
               placeholder="Oud Metha, Dubai"
+              hint="Players tap this to open Maps, so make it findable."
+            />
+          </Section>
+
+          <Section title="When">
+            <GameTimeFields
+              startValue={field(
+                "start",
+                game ? utcToDubaiLocal(game.startUtc) : "",
+              )}
+              endValue={field("end", game ? utcToDubaiLocal(game.endUtc) : "")}
             />
 
-            <div class="grid gap-5 sm:grid-cols-2">
-              <Field
-                label="Starts"
-                name="start"
-                type="datetime-local"
-                required
-                value={field(
-                  "start",
-                  game ? utcToDubaiLocal(game.startUtc) : "",
-                )}
-                hint="Dubai time."
-              />
-              <Field
-                label="Ends"
-                name="end"
-                type="datetime-local"
-                required
-                value={field("end", game ? utcToDubaiLocal(game.endUtc) : "")}
-              />
-            </div>
+            <Field
+              label="Free cancellation until"
+              name="cutoffHours"
+              type="number"
+              min={0}
+              max={336}
+              required
+              value={field("cutoffHours", String(game?.cutoffHours ?? 48))}
+              hint="Hours before the start. After this the roster closes and nobody can drop out for free."
+            />
+          </Section>
 
+          <Section
+            title="Size and cost"
+            description="Capacity is courts × players per court."
+          >
             <div class="grid gap-5 sm:grid-cols-2">
               <Field
                 label="Courts"
@@ -180,34 +222,41 @@ function GameForm(props: FormProps) {
               />
             </div>
 
-            <Field
-              label="Price per player (AED)"
-              name="pricePerPlayer"
-              type="number"
-              min={0}
-              step="0.01"
-              required
-              value={field(
-                "pricePerPlayer",
-                game ? String(game.pricePerPlayerFils / 100) : "",
-              )}
-              hint="What one seat costs. Every player pays this, guests included."
-            />
+            <div class="grid gap-5 sm:grid-cols-2">
+              <Field
+                label="Price per player (AED)"
+                name="pricePerPlayer"
+                type="number"
+                min={0}
+                step="0.01"
+                required
+                value={field(
+                  "pricePerPlayer",
+                  game ? String(game.pricePerPlayerFils / 100) : "",
+                )}
+                placeholder="30"
+                hint="Every seat pays this, guests included."
+              />
+              <Field
+                label="Guests per player"
+                name="maxGuests"
+                type="number"
+                min={0}
+                max={4}
+                required
+                value={field(
+                  "maxGuests",
+                  String(game?.maxGuestsPerPlayer ?? 1),
+                )}
+                hint="0 turns guests off. A guest takes a real seat."
+              />
+            </div>
+          </Section>
 
-            <Field
-              label="Guests allowed per player"
-              name="maxGuests"
-              type="number"
-              min={0}
-              max={4}
-              required
-              value={field(
-                "maxGuests",
-                String(game?.maxGuestsPerPlayer ?? 1),
-              )}
-              hint="0 turns guests off. A guest takes a real seat and pays the same."
-            />
-
+          <Section
+            title="Who can play"
+            description="Skill is guidance, not a barrier — a player outside the range is warned but can still join."
+          >
             <div class="grid gap-5 sm:grid-cols-2">
               <Select label="Minimum skill" name="skillMin">
                 <option value="" selected={!game?.skillMin}>Any</option>
@@ -235,49 +284,32 @@ function GameForm(props: FormProps) {
               </Select>
             </div>
 
-            <p class="text-label-sm text-on-surface-variant -mt-2">
-              Skill is guidance, not a barrier — a player outside the range is
-              warned but can still join.
-            </p>
-
-            <Field
-              label="Cancellation cutoff (hours before start)"
-              name="cutoffHours"
-              type="number"
-              min={0}
-              max={336}
-              required
-              value={field("cutoffHours", String(game?.cutoffHours ?? 48))}
-              hint="Free cancellation up to this point. After it the roster freezes and the cost locks."
-            />
-
             <Select
               label="Visibility"
               name="visibility"
-              hint="Unlisted games are reachable only by their link."
             >
               <option
                 value="public"
                 selected={!game || game.visibility === "public"}
               >
-                Public — listed for everyone
+                Public — anyone can find it and join
               </option>
               <option
                 value="password"
                 selected={game?.visibility === "password"}
               >
-                Listed, but a code is needed to join
+                Listed, but a six-digit code is needed to join
               </option>
               <option
                 value="unlisted"
                 selected={game?.visibility === "unlisted"}
               >
-                Unlisted — link only
+                Unlisted — only people with the link
               </option>
             </Select>
 
             {game?.visibility === "password" && game.joinCode && (
-              <Card class="flex flex-col gap-1">
+              <div class="flex flex-col gap-1 rounded-lg bg-surface-container px-4 py-3">
                 <span class="text-label font-bold text-on-surface-variant">
                   Join code
                 </span>
@@ -288,14 +320,14 @@ function GameForm(props: FormProps) {
                   Share this with the players you want in. Anyone can see the
                   game; only this code lets them take a seat.
                 </span>
-              </Card>
+              </div>
             )}
+          </Section>
 
-            <Button type="submit" fullWidth>
-              {editing ? "Save changes" : "Post this game"}
-            </Button>
-          </form>
-        </Card>
+          <Button type="submit" fullWidth>
+            {editing ? "Save changes" : "Post this game"}
+          </Button>
+        </form>
 
         {editing && game.status !== "cancelled" && (
           <Card>

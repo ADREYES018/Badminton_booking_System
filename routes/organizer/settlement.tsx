@@ -28,7 +28,7 @@ import {
   settlementFor,
 } from "../../lib/data/signups.ts";
 import { getUser } from "../../lib/data/users.ts";
-import { formatFils } from "../../lib/domain/money.ts";
+import { amountOwed, formatFils } from "../../lib/domain/money.ts";
 import { formatGameTime } from "../../lib/domain/time.ts";
 import type { Game, Signup, User } from "../../lib/types.ts";
 
@@ -145,6 +145,7 @@ function SettlementPage(props: SettlementProps) {
                     <PlayerRow
                       key={row.signup.userId}
                       row={row}
+                      game={game}
                       slug={game.slug}
                       csrf={csrf}
                     />
@@ -171,32 +172,38 @@ function SettlementPage(props: SettlementProps) {
  * unpaid row would invite the organizer to assert a transfer that never
  * happened.
  */
-function PlayerRow(props: { row: Row; slug: string; csrf: string }) {
+function PlayerRow(
+  props: { row: Row; game: Game; slug: string; csrf: string },
+) {
   const { signup, user } = props.row;
   const name = user?.name ?? "Player";
 
   return (
-    <li class="flex flex-wrap items-center gap-3 py-3">
-      <Avatar
-        name={name}
-        userId={signup.userId}
-        hasPhoto={user?.hasPhoto}
-        size={36}
-      />
-      <div class="flex flex-col min-w-0 flex-1">
-        <span class="text-body-md text-on-surface truncate">{name}</span>
-        <span class="text-label-sm text-on-surface-variant">
-          {formatFils(signup.owedFils ?? 0)}
-          {signup.guests.length > 0 &&
-            ` · ${signup.guests.length} guest${
-              signup.guests.length === 1 ? "" : "s"
-            }`}
-        </span>
+    // Two rows on a phone and one on a wider screen. Four things abreast at
+    // 390px left the name truncated to three characters while the button took
+    // a third of the width — and the name is the part being looked up.
+    <li class="flex flex-col sm:flex-row sm:items-center gap-3 py-3">
+      <div class="flex items-center gap-3 min-w-0 flex-1">
+        <Avatar
+          name={name}
+          userId={signup.userId}
+          hasPhoto={user?.hasPhoto}
+          size={36}
+        />
+        <div class="flex flex-col min-w-0 flex-1">
+          <span class="text-body-md text-on-surface truncate">{name}</span>
+          <span class="text-label-sm text-on-surface-variant">
+            {formatFils(amountOwed(signup, props.game))}
+            {signup.guests.length > 0 &&
+              ` · ${signup.guests.length} guest${
+                signup.guests.length === 1 ? "" : "s"
+              }`}
+          </span>
+        </div>
+        <PaymentStateChip payment={signup.payment} />
       </div>
 
-      <PaymentStateChip payment={signup.payment} />
-
-      <div class="flex gap-2">
+      <div class="flex gap-2 shrink-0">
         {signup.payment !== "paid" && signup.payment !== "refunded" && (
           <form method="post" action={`/games/${props.slug}/payments/confirm`}>
             <input type="hidden" name={CSRF_FIELD} value={props.csrf} />
