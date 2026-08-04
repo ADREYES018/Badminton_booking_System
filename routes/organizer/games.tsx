@@ -22,6 +22,8 @@ import {
   csrfCookie,
   HttpError,
   isSecureRequest,
+  requireGameOrganizer,
+  requireUser,
   resolveGroupAccess,
   verifyCsrf,
 } from "../../lib/auth/middleware.ts";
@@ -29,6 +31,7 @@ import {
   affectsCutoff,
   cancelGame,
   createGame,
+  deleteGame,
   getGameBySlug,
   updateGame,
 } from "../../lib/data/games.ts";
@@ -37,13 +40,29 @@ import { enqueueCutoffFreeze } from "../../lib/queue/messages.ts";
 import { aedToFils } from "../../lib/domain/money.ts";
 import { APP_TIMEZONE, cutoffAt } from "../../lib/domain/time.ts";
 import { cleanText } from "../../lib/domain/validate.ts";
-import { SKILL_ORDER } from "../../lib/types.ts";
-import type { Game, GameVisibility, Skill, User } from "../../lib/types.ts";
+import {
+  DEFAULT_SPORT,
+  isSport,
+  SKILL_ORDER,
+  SPORT_LABELS,
+  SPORTS,
+} from "../../lib/types.ts";
+import type {
+  Game,
+  GameVisibility,
+  Skill,
+  Sport,
+  User,
+} from "../../lib/types.ts";
 
 interface FormProps {
   user: User;
   csrf: string;
-  groupSlug: string;
+  /**
+   * The club the game is posted into. Absent for a clubless game, which posts
+   * to `/games/new` and belongs to whoever created it.
+   */
+  groupSlug?: string;
   game?: Game;
   error?: string;
   values?: Record<string, string>;
@@ -113,12 +132,23 @@ function GameForm(props: FormProps) {
   const editing = game !== undefined;
   const field = (name: string, fallback: string) => values[name] ?? fallback;
 
+  // A club's games post and edit under that club; a clubless game uses the
+  // bare paths, which check the creator instead of a membership. The two sets
+  // are otherwise the same form.
+  const base = groupSlug ? `/g/${groupSlug}/organizer/games` : "/games";
+  const action = editing ? `${base}/${game.slug}` : base;
+  const backHref = editing
+    ? `/games/${game.slug}`
+    : groupSlug
+    ? `/g/${groupSlug}/games`
+    : "/games";
+
   return (
     <Page user={props.user} nav="games" groupSlug={groupSlug}>
       <div class="max-w-2xl mx-auto flex flex-col gap-6">
         <div>
           <a
-            href={editing ? `/games/${game.slug}` : `/g/${groupSlug}/games`}
+            href={backHref}
             class="text-label font-bold text-on-surface-variant hover:text-primary transition-colors"
           >
             ← Back
@@ -126,15 +156,19 @@ function GameForm(props: FormProps) {
           <h1 class="text-headline-lg font-headline text-on-surface mt-2">
             {editing ? "Edit game" : "New game"}
           </h1>
+          {!editing && !groupSlug && (
+            <p class="text-body-md text-on-surface-variant mt-1">
+              This game is yours rather than a club's. You run it, and anyone
+              with the link can join.
+            </p>
+          )}
         </div>
 
         {props.error && <Alert tone="error">{props.error}</Alert>}
 
         <form
           method="post"
-          action={editing
-            ? `/g/${groupSlug}/organizer/games/${game.slug}`
-            : `/g/${groupSlug}/organizer/games`}
+          action={action}
           class="flex flex-col gap-5"
         >
           <input type="hidden" name={CSRF_FIELD} value={props.csrf} />
@@ -151,6 +185,19 @@ function GameForm(props: FormProps) {
               value={field("title", game?.title ?? "")}
               placeholder="Sunday Doubles"
             />
+
+            <Select label="Sport" name="sport">
+              {SPORTS.map((sport) => (
+                <option
+                  key={sport}
+                  value={sport}
+                  selected={(values.sport ?? game?.sport ?? DEFAULT_SPORT) ===
+                    sport}
+                >
+                  {SPORT_LABELS[sport]}
+                </option>
+              ))}
+            </Select>
 
             <Field
               label="Venue name"
@@ -195,9 +242,19 @@ function GameForm(props: FormProps) {
 
           <Section
             title="Size and cost"
-            description="Capacity is courts × players per court."
+            description="How many can play, and what a seat costs."
           >
             <div class="grid gap-5 sm:grid-cols-2">
+              <Field
+                label="Players"
+                name="maxPlayers"
+                type="number"
+                min={2}
+                max={200}
+                required
+                value={field("maxPlayers", String(game?.maxPlayers ?? 8))}
+                hint="Total spots on the roster. Guests take one each."
+              />
               <Field
                 label="Courts"
                 name="courts"
@@ -206,19 +263,7 @@ function GameForm(props: FormProps) {
                 max={20}
                 required
                 value={field("courts", String(game?.courts ?? 2))}
-              />
-              <Field
-                label="Players per court"
-                name="playersPerCourt"
-                type="number"
-                min={2}
-                max={12}
-                required
-                value={field(
-                  "playersPerCourt",
-                  String(game?.playersPerCourt ?? 4),
-                )}
-                hint="Doubles is 4."
+                hint="How many you have booked."
               />
             </div>
 
@@ -333,7 +378,7 @@ function GameForm(props: FormProps) {
           <Card>
             <form
               method="post"
-              action={`/g/${groupSlug}/organizer/games/${game.slug}/cancel`}
+              action={`${base}/${game.slug}/cancel`}
               class="flex flex-col gap-3"
             >
               <input type="hidden" name={CSRF_FIELD} value={props.csrf} />
@@ -355,6 +400,36 @@ function GameForm(props: FormProps) {
             </form>
           </Card>
         )}
+
+        {
+          /*
+          Deleting is kept apart from cancelling and worded to say which is
+          probably wanted: cancelling tells the roster, deleting hides the game
+          from them. The confirmation is on the submit itself rather than a
+          typed phrase, because the roster and the money behind it survive
+          either way — this is recoverable in the sense that matters.
+        */
+        }
+        {editing && (
+          <Card>
+            <form
+              method="post"
+              action={`${base}/${game.slug}/delete`}
+              class="flex flex-col gap-3"
+            >
+              <input type="hidden" name={CSRF_FIELD} value={props.csrf} />
+              <h2 class="text-body-lg font-bold text-on-surface">
+                Delete this game
+              </h2>
+              <p class="text-label-sm text-on-surface-variant">
+                Removes it from the listings and from your games. Nobody will be
+                able to open it. The roster, attendance and any payments are
+                kept — if players need telling, cancel it instead.
+              </p>
+              <Button type="submit" variant="danger">Delete game</Button>
+            </form>
+          </Card>
+        )}
       </div>
     </Page>
   );
@@ -362,12 +437,13 @@ function GameForm(props: FormProps) {
 
 interface ParsedGame {
   title: string;
+  sport: Sport;
   venueName: string;
   venueAddress: string;
   startUtc: string;
   endUtc: string;
   courts: number;
-  playersPerCourt: number;
+  maxPlayers: number;
   pricePerPlayerFils: number;
   maxGuestsPerPlayer: number;
   cutoffHours: number;
@@ -380,6 +456,11 @@ interface ParsedGame {
 function parseForm(form: FormData): ParsedGame | { error: string } {
   const title = cleanText(form.get("title")?.toString() ?? "", 80);
   if (title.length < 3) return { error: "Give the game a title." };
+
+  // An unrecognised value means a tampered or stale form rather than a choice
+  // worth refusing over, so it falls back rather than erroring.
+  const sportRaw = form.get("sport")?.toString() ?? "";
+  const sport: Sport = isSport(sportRaw) ? sportRaw : DEFAULT_SPORT;
 
   const venueName = cleanText(form.get("venueName")?.toString() ?? "", 80);
   const venueAddress = cleanText(
@@ -398,12 +479,12 @@ function parseForm(form: FormData): ParsedGame | { error: string } {
   }
 
   const courts = Number(form.get("courts"));
-  const playersPerCourt = Number(form.get("playersPerCourt"));
+  const maxPlayers = Number(form.get("maxPlayers"));
   if (!Number.isInteger(courts) || courts < 1) {
     return { error: "Courts must be a whole number, at least one." };
   }
-  if (!Number.isInteger(playersPerCourt) || playersPerCourt < 2) {
-    return { error: "A court needs at least two players." };
+  if (!Number.isInteger(maxPlayers) || maxPlayers < 2) {
+    return { error: "A game needs room for at least two players." };
   }
 
   const pricePerPlayer = Number(form.get("pricePerPlayer"));
@@ -445,12 +526,13 @@ function parseForm(form: FormData): ParsedGame | { error: string } {
 
   return {
     title,
+    sport,
     venueName,
     venueAddress,
     startUtc,
     endUtc,
     courts,
-    playersPerCourt,
+    maxPlayers,
     pricePerPlayerFils: aedToFils(pricePerPlayer),
     maxGuestsPerPlayer,
     cutoffHours,
@@ -497,6 +579,117 @@ async function gameInGroup(kv: Deno.Kv, groupId: string, slug: string) {
   return game;
 }
 
+/**
+ * Who is acting, and on which game, for the club-free routes.
+ *
+ * The club routes prove the caller may administer the club and then find the
+ * game inside it. There is no club here, so the game is found first and the
+ * rights are read off the game itself — its creator, or a super_admin.
+ *
+ * These routes serve club games too, which is what makes a single "edit this
+ * game" link work from the game page without knowing which kind it is. The
+ * guard is the same either way: `requireGameOrganizer` consults the club when
+ * there is one.
+ */
+async function gameContext(state: State, slug: string) {
+  const kv = state.auth.kv;
+  const game = await getGameBySlug(kv, slug);
+  if (!game) throw new HttpError(404, "That game could not be found");
+
+  const access = await requireGameOrganizer(state.auth, game);
+  return { user: access.user, kv, game, group: access.group };
+}
+
+/**
+ * The Fresh context these handlers need.
+ *
+ * Spelled out rather than inferred because the same handler is registered on
+ * two URL shapes, and a shared handler cannot take its type from one of them.
+ */
+interface EditCtx {
+  req: Request;
+  params: Record<string, string | undefined>;
+  state: State;
+  render: (node: preact.VNode) => Promise<Response>;
+  redirect: (to: string) => Response;
+}
+
+/**
+ * Creates the game, schedules its cutoff freeze, records it, and sends the
+ * organizer to it.
+ *
+ * Shared by the club and clubless create routes, which differ only in the
+ * `groupId` they pass and the rights they checked before getting here.
+ */
+async function postGame(
+  ctx: EditCtx,
+  kv: Deno.Kv,
+  user: User,
+  groupId: string | null,
+  parsed: ParsedGame,
+): Promise<Response> {
+  const game = await createGame(kv, {
+    groupId,
+    title: parsed.title,
+    sport: parsed.sport,
+    venue: { name: parsed.venueName, address: parsed.venueAddress },
+    startUtc: parsed.startUtc,
+    endUtc: parsed.endUtc,
+    courts: parsed.courts,
+    maxPlayers: parsed.maxPlayers,
+    pricePerPlayerFils: parsed.pricePerPlayerFils,
+    maxGuestsPerPlayer: parsed.maxGuestsPerPlayer,
+    cutoffHours: parsed.cutoffHours,
+    skillMin: parsed.skillMin,
+    skillMax: parsed.skillMax,
+    visibility: parsed.visibility,
+    createdBy: user.id,
+  });
+
+  // Freeze the roster and lock the cost when the cutoff arrives.
+  await enqueueCutoffFreeze(
+    kv,
+    game.id,
+    cutoffAt(game.startUtc, game.cutoffHours).toISOString(),
+  );
+
+  await audit(kv, {
+    actorId: user.id,
+    action: "game.created",
+    targetId: game.id,
+    groupId,
+    after: { title: game.title, startUtc: game.startUtc },
+    ip: clientIp(ctx.req),
+  });
+
+  // `posted=1` raises the confirmation on the page they land on. It rides on
+  // the redirect rather than being inferred from anything on the record, so
+  // a reload drops it and the organizer is congratulated once.
+  return ctx.redirect(`/games/${game.slug}?posted=1`);
+}
+
+/** The edit form, with the CSRF cookie the form's own POST will check. */
+async function renderEditForm(
+  ctx: EditCtx,
+  user: User,
+  game: Game,
+  groupSlug: string | undefined,
+): Promise<Response> {
+  const response = await ctx.render(
+    <GameForm
+      user={user}
+      csrf={ctx.state.auth.csrfToken}
+      groupSlug={groupSlug}
+      game={game}
+    />,
+  );
+  response.headers.append(
+    "set-cookie",
+    csrfCookie(ctx.state.auth.csrfToken, isSecureRequest(ctx.req)),
+  );
+  return response;
+}
+
 export function organizerGameRoutes(app: App<State>) {
   app.get("/g/:groupSlug/organizer/games/new", async (ctx) => {
     const { user, group } = await organizerContext(
@@ -541,59 +734,21 @@ export function organizerGameRoutes(app: App<State>) {
       );
     }
 
-    const game = await createGame(kv, {
-      groupId: group.id,
-      title: parsed.title,
-      venue: { name: parsed.venueName, address: parsed.venueAddress },
-      startUtc: parsed.startUtc,
-      endUtc: parsed.endUtc,
-      courts: parsed.courts,
-      playersPerCourt: parsed.playersPerCourt,
-      pricePerPlayerFils: parsed.pricePerPlayerFils,
-      maxGuestsPerPlayer: parsed.maxGuestsPerPlayer,
-      cutoffHours: parsed.cutoffHours,
-      skillMin: parsed.skillMin,
-      skillMax: parsed.skillMax,
-      visibility: parsed.visibility,
-      createdBy: user.id,
-    });
-
-    // Freeze the roster and lock the cost when the cutoff arrives.
-    await enqueueCutoffFreeze(
-      kv,
-      game.id,
-      cutoffAt(game.startUtc, game.cutoffHours).toISOString(),
-    );
-
-    await audit(kv, {
-      actorId: user.id,
-      action: "game.created",
-      targetId: game.id,
-      groupId: group.id,
-      after: { title: game.title, startUtc: game.startUtc },
-      ip: clientIp(ctx.req),
-    });
-
-    // `posted=1` raises the confirmation on the page they land on. It rides on
-    // the redirect rather than being inferred from anything on the record, so
-    // a reload drops it and the organizer is congratulated once.
-    return ctx.redirect(`/games/${game.slug}?posted=1`);
+    return await postGame(ctx, kv, user, group.id, parsed);
   });
 
-  app.get("/g/:groupSlug/organizer/games/:slug/edit", async (ctx) => {
-    const { user, kv, group } = await organizerContext(
-      ctx.state,
-      ctx.params.groupSlug!,
-    );
-    const game = await gameInGroup(kv, group.id, ctx.params.slug!);
+  /**
+   * Posting a game that belongs to nobody.
+   *
+   * The one route here that does not check organizer rights at all: anyone
+   * signed in may post a game, and doing so makes them its organizer. Playing
+   * badminton with friends does not require founding a club first.
+   */
+  app.get("/games/new", async (ctx) => {
+    const user = requireUser(ctx.state.auth);
 
     const response = await ctx.render(
-      <GameForm
-        user={user}
-        csrf={ctx.state.auth.csrfToken}
-        groupSlug={group.slug}
-        game={game}
-      />,
+      <GameForm user={user} csrf={ctx.state.auth.csrfToken} />,
     );
     response.headers.append(
       "set-cookie",
@@ -602,18 +757,14 @@ export function organizerGameRoutes(app: App<State>) {
     return response;
   });
 
-  app.post("/g/:groupSlug/organizer/games/:slug", async (ctx) => {
-    const { user, kv, group } = await organizerContext(
-      ctx.state,
-      ctx.params.groupSlug!,
-    );
+  app.post("/games", async (ctx) => {
+    const user = requireUser(ctx.state.auth);
+    const kv = ctx.state.auth.kv;
     const form = await ctx.req.formData();
 
     if (!verifyCsrf(ctx.req, form.get(CSRF_FIELD)?.toString() ?? null)) {
       throw new HttpError(403, "That form expired. Please try again.");
     }
-
-    const game = await gameInGroup(kv, group.id, ctx.params.slug!);
 
     const parsed = parseForm(form);
     if ("error" in parsed) {
@@ -621,7 +772,57 @@ export function organizerGameRoutes(app: App<State>) {
         <GameForm
           user={user}
           csrf={ctx.state.auth.csrfToken}
-          groupSlug={group.slug}
+          error={parsed.error}
+          values={formValues(form)}
+        />,
+      );
+    }
+
+    return await postGame(ctx, kv, user, null, parsed);
+  });
+
+  // ---- Edit, cancel and delete -------------------------------------------
+  //
+  // Registered on both shapes. The club paths are what the club's own screens
+  // link to; the bare paths are what the game page links to, since it has one
+  // link to offer whether or not the game has a club. Both end in the same
+  // handler, and both are guarded by `requireGameOrganizer`.
+
+  app.get("/games/:slug/edit", async (ctx) => {
+    const { user, game, group } = await gameContext(
+      ctx.state,
+      ctx.params.slug!,
+    );
+    return await renderEditForm(ctx, user, game, group?.slug);
+  });
+
+  app.get("/g/:groupSlug/organizer/games/:slug/edit", async (ctx) => {
+    const { user, kv, group } = await organizerContext(
+      ctx.state,
+      ctx.params.groupSlug!,
+    );
+    const game = await gameInGroup(kv, group.id, ctx.params.slug!);
+    return await renderEditForm(ctx, user, game, group.slug);
+  });
+
+  const saveEdit = async (ctx: EditCtx, groupSlug?: string) => {
+    const { user, kv, game, group } = await gameContext(
+      ctx.state,
+      ctx.params.slug!,
+    );
+    const form = await ctx.req.formData();
+
+    if (!verifyCsrf(ctx.req, form.get(CSRF_FIELD)?.toString() ?? null)) {
+      throw new HttpError(403, "That form expired. Please try again.");
+    }
+
+    const parsed = parseForm(form);
+    if ("error" in parsed) {
+      return await ctx.render(
+        <GameForm
+          user={user}
+          csrf={ctx.state.auth.csrfToken}
+          groupSlug={groupSlug ?? group?.slug}
           game={game}
           error={parsed.error}
           values={formValues(form)}
@@ -631,11 +832,12 @@ export function organizerGameRoutes(app: App<State>) {
 
     const update = {
       title: parsed.title,
+      sport: parsed.sport,
       venue: { name: parsed.venueName, address: parsed.venueAddress },
       startUtc: parsed.startUtc,
       endUtc: parsed.endUtc,
       courts: parsed.courts,
-      playersPerCourt: parsed.playersPerCourt,
+      maxPlayers: parsed.maxPlayers,
       pricePerPlayerFils: parsed.pricePerPlayerFils,
       maxGuestsPerPlayer: parsed.maxGuestsPerPlayer,
       cutoffHours: parsed.cutoffHours,
@@ -661,7 +863,7 @@ export function organizerGameRoutes(app: App<State>) {
       actorId: user.id,
       action: "game.updated",
       targetId: game.id,
-      groupId: group.id,
+      groupId: game.groupId,
       before: {
         startUtc: game.startUtc,
         pricePerPlayerFils: game.pricePerPlayerFils,
@@ -674,12 +876,18 @@ export function organizerGameRoutes(app: App<State>) {
     });
 
     return ctx.redirect(`/games/${updated.slug}`);
-  });
+  };
 
-  app.post("/g/:groupSlug/organizer/games/:slug/cancel", async (ctx) => {
-    const { user, kv, group } = await organizerContext(
+  app.post("/games/:slug", (ctx) => saveEdit(ctx));
+  app.post(
+    "/g/:groupSlug/organizer/games/:slug",
+    (ctx) => saveEdit(ctx, ctx.params.groupSlug!),
+  );
+
+  const cancel = async (ctx: EditCtx, groupSlug?: string) => {
+    const { user, kv, game, group } = await gameContext(
       ctx.state,
-      ctx.params.groupSlug!,
+      ctx.params.slug!,
     );
     const form = await ctx.req.formData();
 
@@ -687,15 +895,13 @@ export function organizerGameRoutes(app: App<State>) {
       throw new HttpError(403, "That form expired. Please try again.");
     }
 
-    const game = await gameInGroup(kv, group.id, ctx.params.slug!);
-
     const reason = cleanText(form.get("reason")?.toString() ?? "", 140);
     if (reason.length < 3) {
       return await ctx.render(
         <GameForm
           user={user}
           csrf={ctx.state.auth.csrfToken}
-          groupSlug={group.slug}
+          groupSlug={groupSlug ?? group?.slug}
           game={game}
           error="Say why the game is off — everyone on the roster will see it."
         />,
@@ -707,11 +913,54 @@ export function organizerGameRoutes(app: App<State>) {
       actorId: user.id,
       action: "game.cancelled",
       targetId: game.id,
-      groupId: group.id,
+      groupId: game.groupId,
       after: { reason },
       ip: clientIp(ctx.req),
     });
 
     return ctx.redirect(`/games/${game.slug}`);
-  });
+  };
+
+  app.post("/games/:slug/cancel", (ctx) => cancel(ctx));
+  app.post(
+    "/g/:groupSlug/organizer/games/:slug/cancel",
+    (ctx) => cancel(ctx, ctx.params.groupSlug!),
+  );
+
+  /**
+   * Deleting a game.
+   *
+   * Hides it everywhere and keeps every record behind it; see `deleteGame`.
+   * The organizer lands back on whichever listing the game came from, since
+   * the game page they were on no longer resolves.
+   */
+  const remove = async (ctx: EditCtx) => {
+    const { user, kv, game, group } = await gameContext(
+      ctx.state,
+      ctx.params.slug!,
+    );
+    const form = await ctx.req.formData();
+
+    if (!verifyCsrf(ctx.req, form.get(CSRF_FIELD)?.toString() ?? null)) {
+      throw new HttpError(403, "That form expired. Please try again.");
+    }
+
+    await deleteGame(kv, game.id, user.id);
+    await audit(kv, {
+      actorId: user.id,
+      action: "game.deleted",
+      targetId: game.id,
+      groupId: game.groupId,
+      before: { title: game.title, startUtc: game.startUtc },
+      ip: clientIp(ctx.req),
+    });
+
+    const back = group ? `/g/${group.slug}/games` : "/games";
+    return ctx.redirect(
+      `${back}?notice=${encodeURIComponent("Game deleted.")}`,
+    );
+  };
+
+  app.post("/games/:slug/delete", remove);
+  app.post("/g/:groupSlug/organizer/games/:slug/delete", remove);
 }

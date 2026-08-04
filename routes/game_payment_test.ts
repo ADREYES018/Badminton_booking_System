@@ -81,7 +81,7 @@ function messageFrom(response: Response) {
 async function frozenGame() {
   const { game, organizer, groupId } = await seedGame(kv, {
     courts: 1,
-    playersPerCourt: 4,
+    maxPlayers: 4,
     pricePerPlayerFils: 3000,
     cutoffHours: 2,
     startUtc: new Date(Date.now() + HOUR_MS).toISOString(),
@@ -115,7 +115,7 @@ Deno.test("taking a seat lands the player on the payment prompt", async () => {
   // scroll past.
   const { game } = await seedGame(kv, {
     courts: 1,
-    playersPerCourt: 4,
+    maxPlayers: 4,
     pricePerPlayerFils: 3000,
   });
   const player = await seedPlayer(kv);
@@ -153,7 +153,7 @@ Deno.test("a player can pay before the roster freezes", async () => {
   // pay against while the roster is still open.
   const { game } = await seedGame(kv, {
     courts: 1,
-    playersPerCourt: 4,
+    maxPlayers: 4,
     pricePerPlayerFils: 3000,
   });
   const player = await seedPlayer(kv);

@@ -28,6 +28,7 @@ import {
   listJoinRequests,
   listMembers,
   MembershipError,
+  removeMember,
   requestToJoin,
   setMemberBlocked,
   setMemberRole,
@@ -122,6 +123,23 @@ function MemberRow(
               class="px-4 py-2 text-[13px]"
             >
               {membership.blocked ? "Unblock" : "Block"}
+            </Button>
+          </form>
+
+          {
+            /* Removing is offered next to blocking because they answer
+               different questions: block keeps them on the list and refuses
+               them a seat, remove takes them out of the club entirely. */
+          }
+          <form method="post" action={`${base}/remove`}>
+            <input type="hidden" name={CSRF_FIELD} value={props.csrf} />
+            <Button
+              type="submit"
+              variant="ghost"
+              class="px-4 py-2 text-[13px]"
+              aria-label={`Remove ${nameOf(user)} from this club`}
+            >
+              Remove
             </Button>
           </form>
         </div>
@@ -475,6 +493,41 @@ export function groupMemberRoutes(app: App<State>) {
     return backToMembers(group.slug, {
       notice: blocked ? "Blocked." : "Unblocked.",
     });
+  });
+
+  /**
+   * Removing someone from the club.
+   *
+   * The owner is refused for the same reason they cannot be demoted or
+   * blocked: a club that has removed its own owner has nobody who can
+   * administer it.
+   */
+  app.post("/g/:groupSlug/members/:userId/remove", async (ctx) => {
+    const { access, kv, group } = await beginAction(ctx);
+    const userId = ctx.params.userId!;
+
+    if (userId === group.ownerId) {
+      throw new HttpError(403, "The club's owner cannot be removed.");
+    }
+
+    try {
+      await removeMember(kv, group.id, userId);
+    } catch (error) {
+      if (error instanceof MembershipError) {
+        return backToMembers(group.slug, { error: error.message });
+      }
+      throw error;
+    }
+
+    await audit(kv, {
+      actorId: access.user.id,
+      action: "member.removed",
+      targetId: userId,
+      groupId: group.id,
+      ip: clientIp(ctx.req),
+    });
+
+    return backToMembers(group.slug, { notice: "Removed from the club." });
   });
 
   app.post("/g/:groupSlug/requests/:userId", async (ctx) => {

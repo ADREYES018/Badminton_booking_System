@@ -335,6 +335,43 @@ export async function setMemberBlocked(
   return result;
 }
 
+/**
+ * Removes someone from a club.
+ *
+ * Both the membership and its by-user index go in one commit, so a removed
+ * member cannot linger in one listing and be absent from the other.
+ *
+ * Distinct from blocking, which keeps the row and marks it: a block is a
+ * standing decision the organizer can see and reverse, while removing says
+ * this person is simply not in the club. Someone removed can be invited back
+ * or ask to join again; someone blocked cannot until they are unblocked.
+ *
+ * Their games are left alone. A club is not the only reason someone holds a
+ * seat — games are joinable without membership — so dropping their rosters
+ * here would cancel seats the removal was never about. An organizer who wants
+ * them off a particular game removes them from that game.
+ */
+export async function removeMember(
+  kv: Deno.Kv,
+  groupId: string,
+  userId: string,
+): Promise<void> {
+  const result = await withRetry(kv, async (kv) => {
+    const entry = await getRecord<Membership>(kv, keys.member(groupId, userId));
+    if (!entry.value) throw new MembershipError("They are not in this club.");
+
+    return {
+      op: kv.atomic()
+        .check(entry)
+        .delete(keys.member(groupId, userId))
+        .delete(keys.membersByUser(userId, groupId)),
+      result: true,
+    };
+  });
+
+  if (!result) throw new Error("Removal did not apply");
+}
+
 export async function updatePayout(
   kv: Deno.Kv,
   groupId: string,

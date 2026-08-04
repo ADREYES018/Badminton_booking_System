@@ -96,8 +96,7 @@ export function guestsAllowed(
   game: Pick<
     Game,
     | "maxGuestsPerPlayer"
-    | "courts"
-    | "playersPerCourt"
+    | "maxPlayers"
     | "confirmedCount"
     | "pendingCount"
     | "guestCount"
@@ -112,11 +111,7 @@ export function guestsAllowed(
 export function hasRoom(
   game: Pick<
     Game,
-    | "courts"
-    | "playersPerCourt"
-    | "confirmedCount"
-    | "pendingCount"
-    | "guestCount"
+    "maxPlayers" | "confirmedCount" | "pendingCount" | "guestCount"
   >,
   seatsWanted = 1,
 ): boolean {

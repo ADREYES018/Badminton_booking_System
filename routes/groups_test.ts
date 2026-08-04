@@ -119,7 +119,7 @@ Deno.test("the games list spans every club, not just one", async () => {
     startUtc: futureStart(120),
     endUtc: futureStart(122),
     courts: 1,
-    playersPerCourt: 4,
+    maxPlayers: 4,
     pricePerPlayerFils: 3000,
     cutoffHours: 48,
     createdBy: owner.id,
@@ -149,16 +149,16 @@ Deno.test("the games list offers an organizer their own new-game form", async ()
   assertStringIncludes(body, `/g/${group!.slug}/organizer/games/new`);
 });
 
-Deno.test("someone organizing nothing is pointed at making a club first", async () => {
-  // Posting a game needs a club to post it into, and making one is the step
-  // that turns a player into an organizer.
+Deno.test("someone organizing nothing can still post a game", async () => {
+  // Posting no longer requires founding a club first: a player with no club
+  // gets the club-free form, and the game they post belongs to them.
   const player = await seedComplete("no-club");
 
   const response = await get("/games", await signIn(player));
   const body = await response.text();
 
   assertEquals(response.status, 200);
-  assertStringIncludes(body, 'href="/groups"');
+  assertStringIncludes(body, 'href="/games/new"');
 });
 
 Deno.test("creating a club seats the creator as its organizer", async () => {
@@ -374,7 +374,7 @@ Deno.test("a password game refuses a seat until the code is entered", async () =
     startUtc: futureStart(120),
     endUtc: futureStart(122),
     courts: 1,
-    playersPerCourt: 4,
+    maxPlayers: 4,
     pricePerPlayerFils: 3000,
     cutoffHours: 48,
     createdBy: organizer.id,
@@ -428,7 +428,7 @@ Deno.test("an unlisted game is invisible to a non-member", async () => {
     startUtc: futureStart(120),
     endUtc: futureStart(122),
     courts: 1,
-    playersPerCourt: 4,
+    maxPlayers: 4,
     pricePerPlayerFils: 3000,
     cutoffHours: 48,
     createdBy: organizer.id,

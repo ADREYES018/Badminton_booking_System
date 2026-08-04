@@ -31,6 +31,32 @@ export function presentCount(signups: Signup[]): number {
   return signups.filter((signup) => attendanceOf(signup) === true).length;
 }
 
+/** One roster row as the attendance panel needs it. */
+export interface AttendancePlayer {
+  userId: string;
+  name: string;
+  /** true present, false absent, null not yet marked. */
+  state: boolean | null;
+}
+
+/**
+ * Flattens a roster into what the attendance island renders.
+ *
+ * Lives here rather than in the island because an island's props cross a
+ * serialization boundary: everything it receives is turned into JSON and sent
+ * to the browser, so the panel takes plain rows rather than whole signup
+ * records with payment details and timestamps attached.
+ */
+export function playersFrom(
+  members: { signup: Signup; user: { name: string } | null }[],
+): AttendancePlayer[] {
+  return members.map(({ signup, user }) => ({
+    userId: signup.userId,
+    name: user?.name ?? "Player",
+    state: attendanceOf(signup),
+  }));
+}
+
 /**
  * An attendance mark, as everyone but the organizer sees it.
  *

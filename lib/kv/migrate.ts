@@ -28,7 +28,7 @@ const CURRENT_VERSION: Record<Entity, number> = {
   user: 1,
   group: 1,
   member: 1,
-  game: 2,
+  game: 3,
   signup: 1,
   match: 1,
   stats: 1,
@@ -79,6 +79,40 @@ const MIGRATIONS: Record<Entity, Record<number, MigrationStep>> = {
         ...rest,
         v: 2,
         pricePerPlayerFils: frozen ?? Math.ceil(total / Math.max(confirmed, 1)),
+      };
+    },
+
+    /**
+     * v3 names the sport, states capacity outright, and lets a game belong to
+     * no club.
+     *
+     * Every existing game is badminton — that is the only sport the app has
+     * ever offered, so this is a fact about the old records rather than a
+     * default standing in for one.
+     *
+     * `playersPerCourt` becomes `maxPlayers`, multiplied out by the court
+     * count. That product is exactly what `capacityOf` returned before, so
+     * every roster keeps the size it already had and nobody's game silently
+     * grows or shrinks under them.
+     *
+     * `groupId` becomes nullable in the same step. No stored game has a null
+     * one and none is invented here: the field is left exactly as it was, and
+     * only the type widens. Writing `?? null` would be the same value with a
+     * misleading suggestion that some record needed it.
+     */
+    2: (record) => {
+      const courts = typeof record.courts === "number" ? record.courts : 1;
+      const perCourt = typeof record.playersPerCourt === "number"
+        ? record.playersPerCourt
+        : 4;
+
+      const { playersPerCourt: _playersPerCourt, ...rest } = record;
+
+      return {
+        ...rest,
+        v: 3,
+        sport: typeof record.sport === "string" ? record.sport : "badminton",
+        maxPlayers: Math.max(1, courts) * perCourt,
       };
     },
   },

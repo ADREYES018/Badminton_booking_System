@@ -15,15 +15,22 @@
 import type { App } from "fresh";
 import type { State } from "../main.ts";
 import { Page } from "../components/Layout.tsx";
-import { Alert, EmptyState, LinkButton } from "../components/ui.tsx";
-import { GameCard, viewerStateOf } from "../components/GameCard.tsx";
+import {
+  Alert,
+  Button,
+  cx,
+  EmptyState,
+  LinkButton,
+} from "../components/ui.tsx";
+import { GameCard, SportIcon, viewerStateOf } from "../components/GameCard.tsx";
 import { requireUser, resolveGroupAccess } from "../lib/auth/middleware.ts";
 import { isProfileComplete } from "../lib/data/users.ts";
 import { listAllOpenGames, listOpenGames } from "../lib/data/games.ts";
 import { getSignup } from "../lib/data/signups.ts";
 import { listGroupsOrganizedBy } from "../lib/data/groups.ts";
 import { sweepInBackground } from "../lib/data/sweep.ts";
-import type { Game, Signup } from "../lib/types.ts";
+import { isSport, SPORT_LABELS, SPORTS } from "../lib/types.ts";
+import type { Game, Signup, Sport } from "../lib/types.ts";
 
 interface Listed {
   game: Game;
@@ -34,6 +41,126 @@ function isMine(entry: Listed): boolean {
   const status = entry.signup?.status;
   return status === "confirmed" || status === "pending_confirm" ||
     status === "waitlisted";
+}
+
+/** What the viewer narrowed the list to, read off the query string. */
+interface Filters {
+  sport: Sport | null;
+  query: string;
+}
+
+function filtersFrom(url: URL): Filters {
+  const sportRaw = url.searchParams.get("sport") ?? "";
+  return {
+    sport: isSport(sportRaw) ? sportRaw : null,
+    query: (url.searchParams.get("q") ?? "").trim(),
+  };
+}
+
+/**
+ * Applies the sport filter and the search box.
+ *
+ * Filtering happens here rather than in KV: the listing is a bounded range
+ * read of upcoming games, so it is already in memory, and a per-sport index
+ * would be a second thing to keep in step with `games_all` for no gain at this
+ * size.
+ *
+ * The search covers title and venue — both name and address — because "where
+ * is there a game" and "what is the game called" are the same question asked
+ * two ways, and a player who remembers only "Al Quoz" should find it.
+ */
+function applyFilters(entries: Listed[], filters: Filters): Listed[] {
+  const needle = filters.query.toLowerCase();
+
+  return entries.filter(({ game }) => {
+    if (filters.sport && game.sport !== filters.sport) return false;
+    if (!needle) return true;
+
+    return [game.title, game.venue.name, game.venue.address]
+      .some((field) => field.toLowerCase().includes(needle));
+  });
+}
+
+/**
+ * The search box and the sport chips.
+ *
+ * A plain GET form, so it works with scripting off and every result is a URL
+ * that can be shared or bookmarked. The chips are links rather than inputs for
+ * the same reason: one tap, no submit, and the current filter is visible in
+ * the address bar.
+ */
+function FilterBar(
+  props: { filters: Filters; action: string; total: number; shown: number },
+) {
+  const { filters } = props;
+
+  // Each chip keeps whatever text is in the search box, so narrowing by sport
+  // does not throw away a search the player just typed.
+  const href = (sport: Sport | null) => {
+    const params = new URLSearchParams();
+    if (sport) params.set("sport", sport);
+    if (filters.query) params.set("q", filters.query);
+    const query = params.toString();
+    return query ? `${props.action}?${query}` : props.action;
+  };
+
+  const chip = (sport: Sport | null, label: string) => {
+    const active = filters.sport === sport;
+    return (
+      <a
+        key={label}
+        href={href(sport)}
+        aria-current={active ? "true" : undefined}
+        class={cx(
+          "inline-flex items-center gap-1.5 rounded-full px-4 py-2 text-label font-bold no-underline transition-colors",
+          active
+            ? "bg-primary text-on-primary"
+            : "bg-surface-container text-on-surface-variant hover:text-primary",
+        )}
+      >
+        {sport && <SportIcon sport={sport} size={16} />}
+        {label}
+      </a>
+    );
+  };
+
+  return (
+    <div class="flex flex-col gap-3">
+      <form method="get" action={props.action} class="flex gap-2">
+        {/* Carried through the search so submitting keeps the chosen sport. */}
+        {filters.sport && (
+          <input type="hidden" name="sport" value={filters.sport} />
+        )}
+        <input
+          type="search"
+          name="q"
+          value={filters.query}
+          placeholder="Search by title or venue"
+          aria-label="Search games by title or venue"
+          class="flex-1 min-w-0 rounded-full bg-surface-container px-5 py-3 text-body-md
+                 text-on-surface placeholder:text-on-surface-variant
+                 focus-visible:outline-2 focus-visible:outline-primary"
+        />
+        <Button type="submit" variant="secondary">Search</Button>
+      </form>
+
+      <div class="flex flex-wrap gap-2">
+        {chip(null, "All sports")}
+        {SPORTS.map((sport) => chip(sport, SPORT_LABELS[sport]))}
+      </div>
+
+      {(filters.sport || filters.query) && (
+        <p class="text-label-sm text-on-surface-variant">
+          {props.shown === 0
+            ? "Nothing matches that."
+            : `Showing ${props.shown} of ${props.total} games.`}{" "}
+          <a href={props.action} class="text-primary hover:underline">
+            Clear filters
+          </a>
+        </p>
+      )}
+    </div>
+  );
 }
 
 function Section(
@@ -83,7 +210,7 @@ export function gamesRoute(app: App<State>) {
 
     // A non-member has no signups here by definition, so the lookup is skipped
     // rather than run once per game to return null every time.
-    const entries: Listed[] = access.membership || access.isOrganizer
+    const all: Listed[] = access.membership || access.isOrganizer
       ? await Promise.all(
         games.map(async (game) => ({
           game,
@@ -94,11 +221,14 @@ export function gamesRoute(app: App<State>) {
 
     // Correct anything the queue missed — an overdue freeze, a lapsed offer.
     // Fire-and-forget: this page renders from what was already read.
-    for (const entry of entries) sweepInBackground(kv, entry.game);
+    for (const entry of all) sweepInBackground(kv, entry.game);
+
+    const url = new URL(ctx.req.url);
+    const filters = filtersFrom(url);
+    const entries = applyFilters(all, filters);
 
     const mine = entries.filter(isMine);
     const rest = entries.filter((entry) => !isMine(entry));
-    const url = new URL(ctx.req.url);
 
     return ctx.render(
       <Page user={user} nav="games" groupSlug={group.slug}>
@@ -133,6 +263,16 @@ export function gamesRoute(app: App<State>) {
           {url.searchParams.get("joined") && (
             <Alert tone="success">You are in. Pick a game below.</Alert>
           )}
+          {url.searchParams.get("notice") && (
+            <Alert tone="success">{url.searchParams.get("notice")}</Alert>
+          )}
+
+          <FilterBar
+            filters={filters}
+            action={`/g/${group.slug}/games`}
+            total={all.length}
+            shown={entries.length}
+          />
 
           <Section
             title="Your games"
@@ -145,7 +285,21 @@ export function gamesRoute(app: App<State>) {
             entries={rest}
           />
 
-          {entries.length === 0 && (
+          {entries.length === 0 && all.length > 0 && (
+            <EmptyState title="No games match">
+              <p>
+                Nothing here fits that search. Try another sport, or clear the
+                filters to see everything on at this club.
+              </p>
+              <div class="mt-6 flex justify-center">
+                <LinkButton href={`/g/${group.slug}/games`}>
+                  Clear filters
+                </LinkButton>
+              </div>
+            </EmptyState>
+          )}
+
+          {all.length === 0 && (
             <EmptyState title="No games yet">
               <p>
                 Once an organizer posts a game it will appear here with its
@@ -180,23 +334,28 @@ export function gamesRoute(app: App<State>) {
 
     if (!isProfileComplete(user)) return ctx.redirect("/profile/setup");
 
-    // A game is posted into a club, so the button needs one to aim at. Anyone
-    // organizing somewhere goes straight to the form; anyone else is sent to
-    // make a club first, which is the step that turns them into an organizer.
+    // Posting no longer needs a club to aim at: `/games/new` creates a game
+    // that belongs to whoever posts it. An organizer's own club is still the
+    // better destination when they have one, since a game posted there reaches
+    // that club's members and its settlement screen.
     const organizing = await listGroupsOrganizedBy(kv, user.id);
     const newGameHref = organizing[0]
       ? `/g/${organizing[0].slug}/organizer/games/new`
-      : "/groups";
+      : "/games/new";
 
     const games = await listAllOpenGames(kv);
-    const entries: Listed[] = await Promise.all(
+    const all: Listed[] = await Promise.all(
       games.map(async (game) => ({
         game,
         signup: await getSignup(kv, game.id, user.id),
       })),
     );
 
-    for (const entry of entries) sweepInBackground(kv, entry.game);
+    for (const entry of all) sweepInBackground(kv, entry.game);
+
+    const url = new URL(ctx.req.url);
+    const filters = filtersFrom(url);
+    const entries = applyFilters(all, filters);
 
     const mine = entries.filter(isMine);
     const rest = entries.filter((entry) => !isMine(entry));
@@ -218,6 +377,17 @@ export function gamesRoute(app: App<State>) {
             </LinkButton>
           </div>
 
+          {url.searchParams.get("notice") && (
+            <Alert tone="success">{url.searchParams.get("notice")}</Alert>
+          )}
+
+          <FilterBar
+            filters={filters}
+            action="/games"
+            total={all.length}
+            shown={entries.length}
+          />
+
           <Section
             title="Your games"
             entries={mine}
@@ -229,7 +399,24 @@ export function gamesRoute(app: App<State>) {
             entries={rest}
           />
 
-          {entries.length === 0 && (
+          {
+            /* Two different emptinesses: a filter that matched nothing is the
+               viewer's own doing and needs the filter cleared, not an invitation
+               to post the first game. */
+          }
+          {entries.length === 0 && all.length > 0 && (
+            <EmptyState title="No games match">
+              <p>
+                Nothing here fits that search. Try another sport, or clear the
+                filters to see everything coming up.
+              </p>
+              <div class="mt-6 flex justify-center">
+                <LinkButton href="/games">Clear filters</LinkButton>
+              </div>
+            </EmptyState>
+          )}
+
+          {all.length === 0 && (
             <EmptyState title="No games yet">
               <p>
                 Nothing is on. Post the first one and it will show up here with

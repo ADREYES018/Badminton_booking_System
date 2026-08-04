@@ -69,7 +69,7 @@ async function seedReachablePlayers(count: number) {
 // An open game: the cutoff is days away, so joining and leaving both work.
 const open = await seedGame(kv, {
   courts: 2,
-  playersPerCourt: 4,
+  maxPlayers: 8,
   pricePerPlayerFils: 3000,
   cutoffHours: 48,
   startUtc: new Date(Date.now() + 96 * HOUR_MS).toISOString(),
@@ -94,7 +94,9 @@ for (const player of joiners) {
 // the only window where players can have joined *and* shares exist.
 const frozen = await seedGame(kv, {
   courts: 1,
-  playersPerCourt: 4,
+  // Exactly the four players seeded onto it below, so the roster is full and
+  // a fifth join exercises the waitlist.
+  maxPlayers: 4,
   pricePerPlayerFils: 3000,
   cutoffHours: 2,
   startUtc: new Date(Date.now() + HOUR_MS).toISOString(),

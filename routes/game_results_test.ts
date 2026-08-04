@@ -68,7 +68,7 @@ function messageFrom(response: Response) {
 async function gameOfFour() {
   const { game, groupId } = await seedGame(kv, {
     courts: 1,
-    playersPerCourt: 4,
+    maxPlayers: 4,
   });
   const players = await seedPlayers(kv, 4);
   for (const player of players) await joinGame(kv, game.id, player);

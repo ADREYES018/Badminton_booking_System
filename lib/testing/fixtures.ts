@@ -20,7 +20,17 @@ export function futureStart(hoursAhead = 96): string {
 
 export interface TestGameOptions {
   courts?: number;
+  /**
+   * Capacity, expressed the way it used to be stored.
+   *
+   * Games now carry `maxPlayers` outright, but a test that wants a two-seat
+   * game reads better as "one court, two players per court" than as a bare
+   * total — and keeping the option means the capacity a test asks for is
+   * unchanged from before `maxPlayers` existed. Multiplied out below.
+   */
   playersPerCourt?: number;
+  /** Capacity stated directly, for a roster that is not a multiple of courts. */
+  maxPlayers?: number;
   pricePerPlayerFils?: number;
   maxGuestsPerPlayer?: number;
   cutoffHours?: number;
@@ -46,14 +56,16 @@ export async function seedGame(
   await ensureMembership(kv, group.id, organizer.id, "organizer");
   const startUtc = options.startUtc ?? futureStart();
 
+  const courts = options.courts ?? 1;
+
   const game = await createGame(kv, {
     groupId: group.id,
     title: "Test Session",
     venue: { name: "Test Courts", address: "Dubai" },
     startUtc,
     endUtc: new Date(new Date(startUtc).getTime() + 2 * HOUR_MS).toISOString(),
-    courts: options.courts ?? 1,
-    playersPerCourt: options.playersPerCourt ?? 4,
+    courts,
+    maxPlayers: options.maxPlayers ?? courts * (options.playersPerCourt ?? 4),
     pricePerPlayerFils: options.pricePerPlayerFils ?? 3000,
     maxGuestsPerPlayer: options.maxGuestsPerPlayer ?? 1,
     cutoffHours: options.cutoffHours ?? 48,

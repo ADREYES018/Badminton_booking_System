@@ -24,7 +24,7 @@ import { withTestKv } from "../testing/kv_test_helper.ts";
 async function gameOfFour(kv: Deno.Kv) {
   const { game, groupId } = await seedGame(kv, {
     courts: 1,
-    playersPerCourt: 4,
+    maxPlayers: 4,
   });
   const players = await seedPlayers(kv, 4);
   for (const player of players) await joinGame(kv, game.id, player);

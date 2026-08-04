@@ -163,6 +163,64 @@ export async function requireOrganizer(
 }
 
 /**
+ * The caller's standing over one game, whether or not it belongs to a club.
+ *
+ * A club game's rights come from the club, exactly as before. A clubless game
+ * has no membership to consult, so its creator holds the organizer rights over
+ * it — they posted it, and there is nobody else who could.
+ *
+ * `group` is null for a clubless game, which is what makes the club-only
+ * features fall away rather than needing a placeholder club invented for them.
+ */
+export interface GameAccess {
+  user: User;
+  /** The club running this game, or null when it belongs to nobody. */
+  group: Group | null;
+  membership: Membership | null;
+  /** May edit, cancel, delete, take attendance and settle up. */
+  isOrganizer: boolean;
+}
+
+export async function loadGameAccess(
+  state: AuthState,
+  game: { groupId: string | null; createdBy: string },
+): Promise<GameAccess> {
+  const user = requireUser(state);
+
+  if (game.groupId === null) {
+    return {
+      user,
+      group: null,
+      membership: null,
+      // A super_admin administers everything, the same rule clubs follow.
+      isOrganizer: user.role === "super_admin" || game.createdBy === user.id,
+    };
+  }
+
+  const access = await loadGroupAccess(state, game.groupId);
+  return {
+    user,
+    group: access.group,
+    membership: access.membership,
+    // Whoever posted the game runs it, even if the club later demoted them —
+    // otherwise a game could be left with an organizer nobody can reach.
+    isOrganizer: access.isOrganizer || game.createdBy === user.id,
+  };
+}
+
+/** Throws unless the caller may administer this specific game. */
+export async function requireGameOrganizer(
+  state: AuthState,
+  game: { groupId: string | null; createdBy: string },
+): Promise<GameAccess> {
+  const access = await loadGameAccess(state, game);
+  if (!access.isOrganizer) {
+    throw new HttpError(403, "Only organizers can do that");
+  }
+  return access;
+}
+
+/**
  * The organizer check on rights that have already been loaded.
  *
  * Lets a route that resolved its group from a slug assert organizer access

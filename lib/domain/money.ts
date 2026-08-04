@@ -26,8 +26,15 @@ export function formatFils(fils: number): string {
   return `${negative ? "-" : ""}AED ${body}`;
 }
 
-export function capacityOf(game: Pick<Game, "courts" | "playersPerCourt">) {
-  return game.courts * game.playersPerCourt;
+/**
+ * How many seats the game has.
+ *
+ * The organizer states this outright. It used to be `courts × playersPerCourt`,
+ * which tied the roster size to an even split across courts; the two are now
+ * independent, so this is a read rather than a calculation.
+ */
+export function capacityOf(game: Pick<Game, "maxPlayers">) {
+  return game.maxPlayers;
 }
 
 /**
@@ -47,11 +54,7 @@ export function seatsTaken(
 export function seatsRemaining(
   game: Pick<
     Game,
-    | "courts"
-    | "playersPerCourt"
-    | "confirmedCount"
-    | "pendingCount"
-    | "guestCount"
+    "maxPlayers" | "confirmedCount" | "pendingCount" | "guestCount"
   >,
 ): number {
   return Math.max(0, capacityOf(game) - seatsTaken(game));

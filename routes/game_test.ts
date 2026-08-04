@@ -79,7 +79,7 @@ function messageFrom(response: Response): {
 Deno.test("joining through the route seats the player and redirects", async () => {
   const { game, groupId } = await seedGame(kv, {
     courts: 1,
-    playersPerCourt: 4,
+    maxPlayers: 4,
   });
   const player = await seedPlayer(kv);
   await seedMember(kv, groupId, player);

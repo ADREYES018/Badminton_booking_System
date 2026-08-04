@@ -30,7 +30,7 @@ function gameFixture(overrides: Partial<Game> = {}): Game {
     endUtc: new Date(new Date(startUtc).getTime() + 2 * HOUR_MS).toISOString(),
     courts: 1,
     courtMode: "fixed",
-    playersPerCourt: 4,
+    maxPlayers: 4,
     courtStatus: "not_reserved",
     pricePerPlayerFils: 3000,
     guestPricing: { mode: "free", feeFils: 0 },

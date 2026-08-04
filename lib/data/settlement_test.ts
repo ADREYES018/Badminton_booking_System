@@ -60,7 +60,7 @@ Deno.test("freezing writes each player their own share", async () => {
   await withTestKv(async (kv) => {
     const { game } = await seedGame(kv, {
       courts: 1,
-      playersPerCourt: 4,
+      maxPlayers: 4,
       pricePerPlayerFils: 3000,
       cutoffHours: 48,
       startUtc: pastCutoffStart(),
@@ -82,7 +82,7 @@ Deno.test("a player who brought a guest owes both shares", async () => {
   await withTestKv(async (kv) => {
     const { game } = await seedGame(kv, {
       courts: 1,
-      playersPerCourt: 4,
+      maxPlayers: 4,
       pricePerPlayerFils: 3000,
       maxGuestsPerPlayer: 1,
     });
@@ -108,7 +108,7 @@ Deno.test("a bill written at the cutoff does not move afterwards", async () => {
   await withTestKv(async (kv) => {
     const { game } = await seedGame(kv, {
       courts: 1,
-      playersPerCourt: 4,
+      maxPlayers: 4,
       pricePerPlayerFils: 3000,
       startUtc: pastCutoffStart(),
     });
@@ -145,7 +145,7 @@ Deno.test("held seats are not billed", async () => {
   await withTestKv(async (kv) => {
     const { game } = await seedGame(kv, {
       courts: 1,
-      playersPerCourt: 2,
+      maxPlayers: 2,
       pricePerPlayerFils: 2500,
       startUtc: pastCutoffStart(),
     });
@@ -173,7 +173,7 @@ Deno.test("freezing twice does not rewrite what players owe", async () => {
   await withTestKv(async (kv) => {
     const { game } = await seedGame(kv, {
       courts: 1,
-      playersPerCourt: 4,
+      maxPlayers: 4,
       pricePerPlayerFils: 3000,
       startUtc: pastCutoffStart(),
     });
@@ -195,7 +195,7 @@ Deno.test("an unpaid player counts as owing before the freeze", async () => {
   await withTestKv(async (kv) => {
     const { game } = await seedGame(kv, {
       courts: 1,
-      playersPerCourt: 4,
+      maxPlayers: 4,
       pricePerPlayerFils: 3000,
     });
     const players = await seedPlayers(kv, 2);
@@ -213,7 +213,7 @@ Deno.test("a player can pay before the roster closes", async () => {
   await withTestKv(async (kv) => {
     const { game } = await seedGame(kv, {
       courts: 1,
-      playersPerCourt: 4,
+      maxPlayers: 4,
       pricePerPlayerFils: 3000,
     });
     const [player] = await seedPlayers(kv, 1);
@@ -231,7 +231,7 @@ Deno.test("a bill settled by paying early survives a later price rise", async ()
   await withTestKv(async (kv) => {
     const { game } = await seedGame(kv, {
       courts: 1,
-      playersPerCourt: 4,
+      maxPlayers: 4,
       pricePerPlayerFils: 3000,
     });
     const [player] = await seedPlayers(kv, 1);
@@ -254,7 +254,7 @@ Deno.test("marking then confirming walks the payment states in order", async () 
   await withTestKv(async (kv) => {
     const { game, organizer } = await seedGame(kv, {
       courts: 1,
-      playersPerCourt: 4,
+      maxPlayers: 4,
       pricePerPlayerFils: 3000,
       startUtc: pastCutoffStart(),
     });
@@ -281,7 +281,7 @@ Deno.test("the organizer may confirm a payment the player never marked", async (
   await withTestKv(async (kv) => {
     const { game, organizer } = await seedGame(kv, {
       courts: 1,
-      playersPerCourt: 4,
+      maxPlayers: 4,
       pricePerPlayerFils: 3000,
       startUtc: pastCutoffStart(),
     });
@@ -298,7 +298,7 @@ Deno.test("a late claim cannot undo the organizer's confirmation", async () => {
   await withTestKv(async (kv) => {
     const { game, organizer } = await seedGame(kv, {
       courts: 1,
-      playersPerCourt: 4,
+      maxPlayers: 4,
       pricePerPlayerFils: 3000,
       startUtc: pastCutoffStart(),
     });
@@ -318,7 +318,7 @@ Deno.test("confirming twice is a no-op rather than an error", async () => {
   await withTestKv(async (kv) => {
     const { game, organizer } = await seedGame(kv, {
       courts: 1,
-      playersPerCourt: 4,
+      maxPlayers: 4,
       pricePerPlayerFils: 3000,
       startUtc: pastCutoffStart(),
     });
@@ -339,7 +339,7 @@ Deno.test("settlement counts a claim as outstanding, not collected", async () =>
   await withTestKv(async (kv) => {
     const { game, organizer } = await seedGame(kv, {
       courts: 1,
-      playersPerCourt: 4,
+      maxPlayers: 4,
       pricePerPlayerFils: 3000,
       startUtc: pastCutoffStart(),
     });

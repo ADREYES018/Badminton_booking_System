@@ -129,6 +129,55 @@ export interface JoinRequest {
   decidedBy?: string;
 }
 
+/**
+ * The racquet sport a game is played in.
+ *
+ * Stored on the game rather than the club: one club runs badminton on Sunday
+ * and padel on Wednesday, and a player filtering the list cares which of those
+ * tonight's game is, not who organizes it.
+ */
+export type Sport =
+  | "badminton"
+  | "pickleball"
+  | "table_tennis"
+  | "squash"
+  | "padel";
+
+export const SPORTS: readonly Sport[] = [
+  "badminton",
+  "pickleball",
+  "table_tennis",
+  "squash",
+  "padel",
+];
+
+/**
+ * What each sport is called on screen.
+ *
+ * Kept beside the type so a new sport cannot be added without naming it, which
+ * is what would otherwise reach the UI as a raw `table_tennis`.
+ */
+export const SPORT_LABELS: Record<Sport, string> = {
+  badminton: "Badminton",
+  pickleball: "Pickleball",
+  table_tennis: "Table tennis",
+  squash: "Squash",
+  padel: "Padel",
+};
+
+/**
+ * The sport a game is assumed to be when nothing says otherwise.
+ *
+ * Every game predating the sport field is badminton — that is what the app was
+ * built for and the only thing anyone has posted, so the migration can assign
+ * it without guessing.
+ */
+export const DEFAULT_SPORT: Sport = "badminton";
+
+export function isSport(value: string): value is Sport {
+  return (SPORTS as readonly string[]).includes(value);
+}
+
 export type CourtMode = "fixed" | "flexible";
 export type CourtStatus = "not_reserved" | "reserved" | "paid";
 export type GameVisibility = "public" | "unlisted" | "password";
@@ -150,19 +199,47 @@ export interface Venue {
 }
 
 export interface Game {
-  v: 2;
+  v: 3;
   id: string;
-  groupId: string;
+  /**
+   * The club running this game, or `null` for one that belongs to nobody.
+   *
+   * A clubless game is posted by a player who organizes nothing: they picked a
+   * venue, named a price and want people to turn up. It behaves like any other
+   * game except that the club-scoped features have nothing to hang off —
+   * settlement, payout details and per-club stats all require a club, and are
+   * simply absent rather than faked with a placeholder one.
+   *
+   * Its creator holds the organizer rights instead, which is why every guard
+   * checks `createdBy` before it reaches for a membership.
+   */
+  groupId: string | null;
   /** Unguessable for unlisted/password games; also used in URLs. */
   slug: string;
   title: string;
+  /** Which racquet sport. Drives the list's icon and its filter. */
+  sport: Sport;
   venue: Venue;
   startUtc: string;
   endUtc: string;
 
+  /** How many courts are booked. Shown to players; does not set capacity. */
   courts: number;
   courtMode: CourtMode;
-  playersPerCourt: number;
+  /**
+   * Total seats on the game.
+   *
+   * Organizers were previously asked for players *per court* and the capacity
+   * was multiplied out, which forced an even split across courts and could not
+   * express "three courts, ten players" — the ordinary case where someone
+   * books a spare court so nobody sits out the whole session. The organizer
+   * now states the roster size they want and books whatever courts suit it, so
+   * the two numbers are independent.
+   *
+   * Named for what it is rather than `playersPerCourt`, which is what it used
+   * to mean; `lib/kv/migrate.ts` converts the old field at v3.
+   */
+  maxPlayers: number;
   courtStatus: CourtStatus;
 
   /**
@@ -220,6 +297,18 @@ export interface Game {
   guestCount: number;
 
   cancelledReason?: string;
+  /**
+   * Set when the game is deleted. The record and its roster survive.
+   *
+   * A deleted game is gone from every listing and from its organizer's view,
+   * but the signups, payments and audit entries behind it are untouched — a
+   * game somebody paid into must not be able to erase the fact that they did.
+   * Nothing reads a deleted game except the audit trail, so this is a hide
+   * rather than a status: `status` describes a game that exists, and a deleted
+   * one has no state left to be in.
+   */
+  deletedAt?: string;
+  deletedBy?: string;
   createdBy: string;
   createdAt: string;
   updatedAt: string;
@@ -283,7 +372,15 @@ export interface Match {
   v: 1;
   id: string;
   gameId: string;
-  groupId: string;
+  /**
+   * The club whose leaderboard this match counts toward, or `null` when the
+   * game belongs to no club.
+   *
+   * Results on a clubless game are still recorded and still confirmed by the
+   * losing side — what they cannot do is move a ranking, because there is no
+   * club whose ranking it would be. See `recordMatchStats`.
+   */
+  groupId: string | null;
   /** Doubles: two players per side, drawn from the attended roster. */
   sideA: [string, string];
   sideB: [string, string];

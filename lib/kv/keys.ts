@@ -82,10 +82,24 @@ export const keys = {
   gamesByGroup: (groupId: string, startUtc: string, gameId: string) =>
     ["games_by_group", groupId, startUtc, gameId] as const,
   /**
+   * One player's own games, for a game that belongs to no club.
+   *
+   * `games_by_group` cannot hold these: its first segment is a club id, and a
+   * clubless game has none. Keying by the creator instead gives the same thing
+   * the group index gives an organizer — "the games I am running, in time
+   * order" — for someone whose games are running under nobody's banner.
+   */
+  gamesByCreator: (userId: string, startUtc: string, gameId: string) =>
+    ["games_by_creator", userId, startUtc, gameId] as const,
+  /**
    * Public listing for one group. Unlisted games are excluded.
    *
    * Scoped by group so a range read answers "what is on at this club?" without
    * filtering, and so no group's games can appear in another's listing.
+   *
+   * A clubless game never appears here — it has no club whose page it would
+   * belong on. It is listed in `gamesAll` like any other, which is the index
+   * `/games` reads, so it is browsable everywhere except inside a club.
    */
   gamesOpen: (groupId: string, startUtc: string, gameId: string) =>
     ["games_open", groupId, startUtc, gameId] as const,

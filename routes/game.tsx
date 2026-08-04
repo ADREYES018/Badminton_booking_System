@@ -37,7 +37,8 @@ import PaymentDialog from "../islands/PaymentDialog.tsx";
 import GamePostedDialog from "../islands/GamePostedDialog.tsx";
 import { hasBill, PaymentPanel } from "../components/PaymentPanel.tsx";
 import { ResultsPanel } from "../components/ResultsPanel.tsx";
-import { AttendanceChip, AttendanceToggle } from "../components/Attendance.tsx";
+import { AttendanceChip, playersFrom } from "../components/Attendance.tsx";
+import AttendancePanel from "../islands/AttendancePanel.tsx";
 import { CheckinCode } from "../components/CheckinCode.tsx";
 import { checkinVersionOf, mintCheckinToken } from "../lib/domain/checkin.ts";
 import {
@@ -46,7 +47,8 @@ import {
   csrfCookie,
   HttpError,
   isSecureRequest,
-  loadGroupAccess,
+  loadGameAccess,
+  requireGameOrganizer,
   requireUser,
 } from "../lib/auth/middleware.ts";
 import {
@@ -89,6 +91,7 @@ import {
 import { cleanText } from "../lib/domain/validate.ts";
 import { mapsUrl } from "../lib/domain/venue.ts";
 import { appUrl } from "../lib/email.ts";
+import { SPORT_LABELS } from "../lib/types.ts";
 import type { Game, Match, PayoutDetails, Signup, User } from "../lib/types.ts";
 
 interface RosterMember {
@@ -108,8 +111,11 @@ interface DetailProps {
   payout?: PayoutDetails;
   /** Organizers see the settlement link and the attendance controls. */
   isOrganizer: boolean;
-  /** The club this game belongs to, for links back into its own screens. */
-  groupSlug: string;
+  /**
+   * The club this game belongs to, for links back into its own screens.
+   * Absent for a clubless game, which has no club screens to link to.
+   */
+  groupSlug?: string;
   /**
    * Whether this viewer may take a seat.
    *
@@ -149,8 +155,8 @@ function RosterList(
     title: string;
     members: RosterMember[];
     note?: string;
-    /** Set only for the confirmed list once the cutoff has passed. */
-    attendance?: { slug: string; csrf: string };
+    /** Set for an organizer, who may drop a player from the roster. */
+    remove?: { slug: string; csrf: string; viewerId: string };
   },
 ) {
   if (props.members.length === 0) return null;
@@ -184,17 +190,37 @@ function RosterList(
             {signup.guests.map((guest) => (
               <Chip key={guest.id} tone="neutral">+1 {guest.name}</Chip>
             ))}
-            {props.attendance
-              ? (
-                <AttendanceToggle
-                  signup={signup}
-                  slug={props.attendance.slug}
-                  csrf={props.attendance.csrf}
-                  csrfField={CSRF_FIELD}
-                  name={user?.name ?? "this player"}
+            <AttendanceChip signup={signup} />
+            {
+              /* Removing someone from the roster. Offered only to whoever runs
+                 the game, and never against themselves — an organizer dropping
+                 their own seat uses "Cancel my spot" like anyone else, which
+                 goes through the same refund and waitlist rules. */
+            }
+            {props.remove && signup.userId !== props.remove.viewerId && (
+              <form
+                method="post"
+                action={`/games/${props.remove.slug}/remove`}
+                class="shrink-0"
+              >
+                <input
+                  type="hidden"
+                  name={CSRF_FIELD}
+                  value={props.remove.csrf}
                 />
-              )
-              : <AttendanceChip signup={signup} />}
+                <input type="hidden" name="userId" value={signup.userId} />
+                <Button
+                  type="submit"
+                  variant="ghost"
+                  class="px-4 py-2"
+                  aria-label={`Remove ${
+                    user?.name ?? "this player"
+                  } from this game`}
+                >
+                  Remove
+                </Button>
+              </form>
+            )}
           </li>
         ))}
       </ul>
@@ -389,6 +415,11 @@ function GameDetail(props: DetailProps) {
   const started = new Date(game.startUtc).getTime() <= Date.now();
   // Attendance is only meaningful once the roster is settled.
   const pastCutoff = isPastCutoff(game.startUtc, game.cutoffHours);
+  // A cancelled game's roster is a record of who was on it, not a list to
+  // manage, so the remove controls come off with the game.
+  const remove = props.isOrganizer && game.status !== "cancelled"
+    ? { slug: game.slug, csrf: props.csrf, viewerId: user.id }
+    : undefined;
 
   return (
     <Page user={user} nav="games">
@@ -427,10 +458,7 @@ function GameDetail(props: DetailProps) {
                 {game.venue.name}
               </a>
             </Stat>
-            {
-              /* Players per court is how capacity is computed, not something a
-                player needs told — the seat count is already on the bar. */
-            }
+            <Stat label="Sport">{SPORT_LABELS[game.sport]}</Stat>
             <Stat label="Courts">{game.courts}</Stat>
             <Stat label="Price per player">
               {formatFils(game.pricePerPlayerFils)}
@@ -464,6 +492,33 @@ function GameDetail(props: DetailProps) {
           )}
         </Card>
 
+        {
+          /*
+          The join code, shown to whoever runs the game for as long as the game
+          exists.
+
+          The posted-game dialog also carries it, but that is one dismissible
+          moment and needs JavaScript — an organizer who closed it, reopened the
+          page later, or has scripting off would otherwise have no way back to a
+          code that is the only route into their own game.
+        */
+        }
+        {props.isOrganizer && game.visibility === "password" &&
+          game.joinCode && (
+          <Card class="flex flex-col gap-1">
+            <span class="text-label font-bold text-on-surface-variant">
+              Join code
+            </span>
+            <span class="text-headline-md font-headline text-on-surface tabular-nums tracking-[0.2em]">
+              {game.joinCode}
+            </span>
+            <span class="text-label-sm text-on-surface-variant">
+              Players need this as well as the link. Anyone can see the game;
+              only this code lets them take a seat.
+            </span>
+          </Card>
+        )}
+
         {props.checkinToken && <CheckinCode token={props.checkinToken} />}
 
         {hasBill(props.signup) && (
@@ -496,13 +551,36 @@ function GameDetail(props: DetailProps) {
           />
         )}
 
+        {
+          /*
+          The organizer's way into the game's own settings.
+
+          Editing was previously reachable only from a club's games list, so an
+          organizer looking at the game they wanted to change had to navigate
+          away to change it. The link points at the club-free path, which
+          checks the same rights and works for a game with no club at all.
+
+          Settlement lives under a club, so a clubless game has no screen to
+          link to — its organizer settles up from the roster below.
+        */
+        }
         {props.isOrganizer && (
-          <a
-            href={`/g/${props.groupSlug}/organizer/games/${game.slug}/settlement`}
-            class="text-label font-bold text-primary hover:underline w-fit"
-          >
-            View settlement →
-          </a>
+          <div class="flex flex-wrap items-center gap-4">
+            <a
+              href={`/games/${game.slug}/edit`}
+              class="text-label font-bold text-primary hover:underline w-fit"
+            >
+              Edit game settings →
+            </a>
+            {props.groupSlug && (
+              <a
+                href={`/g/${props.groupSlug}/organizer/games/${game.slug}/settlement`}
+                class="text-label font-bold text-primary hover:underline w-fit"
+              >
+                View settlement →
+              </a>
+            )}
+          </div>
         )}
 
         <ActionPanel {...props} />
@@ -511,19 +589,19 @@ function GameDetail(props: DetailProps) {
           <RosterList
             title="Playing"
             members={props.confirmed}
-            attendance={props.isOrganizer && pastCutoff
-              ? { slug: game.slug, csrf: props.csrf }
-              : undefined}
+            remove={remove}
           />
           <RosterList
             title="Holding a spot"
             members={props.pending}
             note="Offered a spot and yet to confirm."
+            remove={remove}
           />
           <RosterList
             title="Waitlist"
             members={props.waitlisted}
             note="In the order they joined."
+            remove={remove}
           />
           {props.confirmed.length === 0 && props.waitlisted.length === 0 && (
             <p class="text-body-md text-on-surface-variant text-center py-4">
@@ -531,6 +609,33 @@ function GameDetail(props: DetailProps) {
             </p>
           )}
         </Card>
+
+        {
+          /*
+          Attendance is its own panel rather than a control per roster row: it
+          is one task the organizer does once, at the door, and batching it
+          means the page reloads when they are finished instead of after every
+          player. Only after the cutoff, when the roster is settled and there
+          is something to take attendance of.
+        */
+        }
+        {props.isOrganizer && pastCutoff && props.confirmed.length > 0 && (
+          <Card class="flex flex-col gap-4">
+            <div class="flex flex-col gap-1">
+              <h2 class="text-body-lg font-bold text-on-surface">Attendance</h2>
+              <p class="text-label-sm text-on-surface-variant">
+                Mark who turned up, then save. A no-show counts against that
+                player's record.
+              </p>
+            </div>
+            <AttendancePanel
+              slug={game.slug}
+              csrf={props.csrf}
+              csrfField={CSRF_FIELD}
+              players={playersFrom(props.confirmed)}
+            />
+          </Card>
+        )}
 
         {started && (
           <ResultsPanel
@@ -592,7 +697,7 @@ export function gameRoute(app: App<State>) {
     const [signup, roster, access, matches] = await Promise.all([
       getSignup(kv, game.id, user.id),
       loadDetail(kv, game),
-      loadGroupAccess(ctx.state.auth, game.groupId),
+      loadGameAccess(ctx.state.auth, game),
       listMatchesForGame(kv, game.id),
     ]);
 
@@ -615,9 +720,9 @@ export function gameRoute(app: App<State>) {
         game={game}
         signup={signup}
         csrf={ctx.state.auth.csrfToken}
-        payout={access.group.payout}
+        payout={access.group?.payout}
         isOrganizer={access.isOrganizer}
-        groupSlug={access.group.slug}
+        groupSlug={access.group?.slug}
         unlocked={unlocked}
         matches={matches}
         checkinToken={checkinToken}
@@ -683,6 +788,48 @@ export function gameRoute(app: App<State>) {
           notice: result.signup.payment === "forfeited"
             ? "You are off the roster. The cutoff has passed, so your share is still owed."
             : "You are off the roster.",
+        };
+      }),
+  );
+
+  /**
+   * The organizer dropping someone from the roster.
+   *
+   * The same backend call a player's own cancellation makes, with
+   * `byOrganizer` set — which is what stops the removal charging them. A
+   * player who cancels late forfeits their share because the court is booked
+   * either way; someone removed by the organizer chose nothing, so billing
+   * them would be the app taking the organizer's side of a disagreement.
+   *
+   * Freeing a seat promotes the next player on the waitlist, exactly as a
+   * voluntary cancellation does.
+   */
+  app.post(
+    "/games/:slug/remove",
+    (ctx) =>
+      act(ctx, async ({ user, kv, form, game }) => {
+        await requireGameOrganizer(ctx.state.auth, game);
+
+        const userId = form.get("userId")?.toString() ?? "";
+        if (!userId) throw new HttpError(400, "No player was named.");
+
+        // An organizer leaves by cancelling their own spot, which applies the
+        // ordinary cutoff rules to them as it does to everyone else.
+        if (userId === user.id) {
+          return backToGame(game.slug, {
+            error: "Use “Cancel my spot” to take yourself off the roster.",
+          });
+        }
+
+        const removed = await getUser(kv, userId);
+        const result = await leaveGame(kv, game.id, userId, {
+          byOrganizer: true,
+        });
+        await flush(kv, result.effects);
+
+        return {
+          action: "signup.left",
+          notice: `${removed?.name ?? "That player"} is off the roster.`,
         };
       }),
   );

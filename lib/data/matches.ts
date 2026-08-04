@@ -47,7 +47,9 @@ export async function setAttendance(
   gameId: string,
   userId: string,
   attended: boolean,
-  options: { groupId?: string } = {},
+  // `null` is accepted alongside absent so a clubless game's `groupId` passes
+  // straight through: both mean there are no per-club counters to move.
+  options: { groupId?: string | null } = {},
 ): Promise<Signup> {
   // Captured from the read that the winning attempt committed against.
   // `wasMarked` says whether this replaces an earlier mark; `changed` says
@@ -149,7 +151,8 @@ async function bumpAttendance(
 
 export interface ReportMatchInput {
   gameId: string;
-  groupId: string;
+  /** `null` for a clubless game; the result counts toward no leaderboard. */
+  groupId: string | null;
   sideA: [string, string];
   sideB: [string, string];
   scoreA: number;
@@ -325,17 +328,28 @@ function emptyStats(groupId: string, userId: string): PlayerStats {
   };
 }
 
-/** Applies one confirmed match to the four players' records. */
+/**
+ * Applies one confirmed match to the four players' records.
+ *
+ * A clubless game has no leaderboard for a result to move — `stats` is keyed
+ * by club, and there is no club here. The match is still stored, still shown
+ * on the game, and still confirmed by the losing side; it simply ranks nobody.
+ * Inventing a scope to hold these would merge strangers' one-off games into a
+ * single global table nobody asked to be on.
+ */
 async function applyMatchToStats(kv: Deno.Kv, match: Match): Promise<void> {
+  const groupId = match.groupId;
+  if (groupId === null) return;
+
   const won = new Set(winners(match));
 
   for (const userId of [...match.sideA, ...match.sideB]) {
     await withRetry(kv, async (kv) => {
       const entry = await getRecord<PlayerStats>(
         kv,
-        keys.stats(match.groupId, userId),
+        keys.stats(groupId, userId),
       );
-      const stats = entry.value ?? emptyStats(match.groupId, userId);
+      const stats = entry.value ?? emptyStats(groupId, userId);
       const next: PlayerStats = {
         ...stats,
         wins: stats.wins + (won.has(userId) ? 1 : 0),
@@ -347,7 +361,7 @@ async function applyMatchToStats(kv: Deno.Kv, match: Match): Promise<void> {
       return {
         op: kv.atomic()
           .check(entry)
-          .set(keys.stats(match.groupId, userId), next),
+          .set(keys.stats(groupId, userId), next),
         result: true,
       };
     });

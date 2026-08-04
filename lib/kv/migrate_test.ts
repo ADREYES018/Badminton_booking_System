@@ -95,3 +95,58 @@ Deno.test("unknown entities are left alone", () => {
   const record = { v: 1, some: "thing" };
   assertEquals(migrate(["not_an_entity", "x"], record), record);
 });
+
+Deno.test("a v1 game reaches v3 with its capacity and sport intact", () => {
+  // The real chain, not the fixture: a game stored before either change is
+  // read back by today's code, so both steps have to compose.
+  const upgraded = migrate<Record<string, unknown>>(["game", "g1"], {
+    v: 1,
+    id: "g1",
+    groupId: "grp1",
+    courts: 3,
+    playersPerCourt: 4,
+    totalCostFils: 12000,
+    confirmedCount: 4,
+    guestPricing: { mode: "free", feeFils: 0 },
+  });
+
+  assertEquals(upgraded.v, 3);
+  // Capacity was courts × playersPerCourt, and must not move.
+  assertEquals(upgraded.maxPlayers, 12);
+  assertEquals(upgraded.playersPerCourt, undefined);
+  // Every game predating the field was badminton.
+  assertEquals(upgraded.sport, "badminton");
+  // v1 -> v2 still divides the old court total across the roster.
+  assertEquals(upgraded.pricePerPlayerFils, 3000);
+  // A club game keeps its club; nothing invents a null.
+  assertEquals(upgraded.groupId, "grp1");
+});
+
+Deno.test("a v2 game keeps the price it was already charging", () => {
+  const upgraded = migrate<Record<string, unknown>>(["game", "g2"], {
+    v: 2,
+    id: "g2",
+    groupId: null,
+    courts: 1,
+    playersPerCourt: 2,
+    pricePerPlayerFils: 4500,
+  });
+
+  assertEquals(upgraded.v, 3);
+  assertEquals(upgraded.maxPlayers, 2);
+  assertEquals(upgraded.pricePerPlayerFils, 4500);
+  // A clubless game survives the read as clubless.
+  assertEquals(upgraded.groupId, null);
+});
+
+Deno.test("a game that already names its sport keeps it", () => {
+  const upgraded = migrate<Record<string, unknown>>(["game", "g3"], {
+    v: 2,
+    courts: 2,
+    playersPerCourt: 2,
+    sport: "padel",
+  });
+
+  assertEquals(upgraded.sport, "padel");
+  assertEquals(upgraded.maxPlayers, 4);
+});

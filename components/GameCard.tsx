@@ -9,7 +9,8 @@
  * because "3 spots left" answers the question and a filled bar does not.
  */
 
-import type { Game, Signup } from "../lib/types.ts";
+import { SPORT_LABELS } from "../lib/types.ts";
+import type { Game, Signup, Sport } from "../lib/types.ts";
 import { formatFils, seatsRemaining } from "../lib/domain/money.ts";
 import { capacityOf, seatsTaken } from "../lib/domain/money.ts";
 import { formatGameTime, formatRelative } from "../lib/domain/time.ts";
@@ -59,6 +60,75 @@ function ClockIcon() {
       <path d="M12 7v5l3 2" />
     </svg>
   );
+}
+
+/**
+ * A glyph per sport, so a list of five sports is scannable without reading.
+ *
+ * Drawn rather than lettered because the point is telling them apart at a
+ * glance; two sports starting with "P" would defeat an initial. Each is built
+ * from the same stroke primitives as the icons above so they sit together, and
+ * each is a silhouette of the implement — the one thing about a racquet sport
+ * that is unambiguous at 20 pixels.
+ *
+ * Decorative: every card already names its sport in the link's accessible
+ * label, so these are hidden from assistive technology rather than repeating it.
+ */
+export function SportIcon(props: { sport: Sport; size?: number }) {
+  const size = props.size ?? 16;
+  const common = { ...iconProps, width: size, height: size };
+
+  switch (props.sport) {
+    case "badminton":
+      // Shuttlecock: skirt flaring from a corked base.
+      return (
+        <svg {...common}>
+          <path d="M12 3 6 14l6 4 6-4-6-11Z" />
+          <path d="M8.5 9h7M12 3v15" />
+          <circle cx="12" cy="20" r="1.8" />
+        </svg>
+      );
+    case "pickleball":
+      // Paddle with the perforated face the sport is known for.
+      return (
+        <svg {...common}>
+          <rect x="4" y="2" width="12" height="14" rx="6" />
+          <path d="M14 15.5 19 21" />
+          <circle cx="8.5" cy="7" r="0.6" />
+          <circle cx="11.5" cy="10" r="0.6" />
+        </svg>
+      );
+    case "table_tennis":
+      // Round bat and ball.
+      return (
+        <svg {...common}>
+          <circle cx="10" cy="9" r="6" />
+          <path d="M13.5 14 18 20" />
+          <circle cx="19" cy="7" r="1.8" />
+        </svg>
+      );
+    case "squash":
+      // Small-headed racquet with strings, plus the low-bouncing ball.
+      return (
+        <svg {...common}>
+          <ellipse cx="9.5" cy="8" rx="5.5" ry="6.5" />
+          <path d="M9.5 1.5v13M4 8h11" />
+          <path d="M12 13.5 17 20" />
+          <circle cx="19" cy="16" r="1.6" />
+        </svg>
+      );
+    case "padel":
+      // Solid paddle, stubbier than pickleball's and shown face-on.
+      return (
+        <svg {...common}>
+          <path d="M12 2c4.4 0 7 3 7 7s-2.6 7-7 7-7-3-7-7 2.6-7 7-7Z" />
+          <path d="M12 16v6" />
+          <circle cx="9.5" cy="8" r="0.6" />
+          <circle cx="14.5" cy="8" r="0.6" />
+          <circle cx="12" cy="11" r="0.6" />
+        </svg>
+      );
+  }
 }
 
 /** Roster state as a phrase, since a bar alone does not say how many are left. */
@@ -152,6 +222,7 @@ export function GameCard(
         // be every figure inside it read as one run-on sentence.
         aria-label={[
           `${game.title},`,
+          `${SPORT_LABELS[game.sport]}.`,
           `${
             formatGameTime(game.startUtc, game.endUtc)
           } at ${game.venue.name}.`,
@@ -167,14 +238,28 @@ export function GameCard(
                focus-visible:outline-offset-4"
       >
         <div class="flex items-start justify-between gap-3">
-          <h3
-            class={cx(
-              "text-headline-md font-headline text-on-surface",
-              game.status === "cancelled" && "line-through",
-            )}
-          >
-            {game.title}
-          </h3>
+          <div class="flex items-start gap-2.5 min-w-0">
+            {
+              /* Sits with the title rather than in the detail list below: the
+                 sport is how a player decides whether the card is for them at
+                 all, which comes before when and where. */
+            }
+            <span
+              aria-hidden="true"
+              class="mt-1 shrink-0 text-on-surface-variant"
+              title={SPORT_LABELS[game.sport]}
+            >
+              <SportIcon sport={game.sport} size={20} />
+            </span>
+            <h3
+              class={cx(
+                "text-headline-md font-headline text-on-surface",
+                game.status === "cancelled" && "line-through",
+              )}
+            >
+              {game.title}
+            </h3>
+          </div>
           <div
             aria-hidden="true"
             class="flex flex-col items-end gap-1.5 shrink-0"

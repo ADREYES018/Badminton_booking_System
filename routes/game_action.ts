@@ -17,9 +17,9 @@ import type { State } from "../main.ts";
 import {
   clientIp,
   CSRF_FIELD,
-  type GroupAccess,
+  type GameAccess,
   HttpError,
-  loadGroupAccess,
+  loadGameAccess,
   requireUser,
   verifyCsrf,
 } from "../lib/auth/middleware.ts";
@@ -53,8 +53,11 @@ export interface ActionContext {
   kv: Deno.Kv;
   form: FormData;
   game: Game;
-  /** The caller's standing in the club that owns this game. */
-  access: GroupAccess;
+  /**
+   * The caller's standing over this game — from the club that owns it, or
+   * from having posted it when no club does.
+   */
+  access: GameAccess;
 }
 
 /** Redirect carrying a message, so a refresh never resubmits the action. */
@@ -71,7 +74,8 @@ export function backToGame(
 
 /**
  * Shared prologue: authenticate, verify CSRF, load the game, and load the
- * caller's rights over the club that owns it.
+ * caller's rights over it — from its club, or from having posted it when it
+ * has none.
  *
  * Membership is loaded but not required here. Acting on a game needs it, and
  * every caller that changes something asserts it — but which failure is right
@@ -90,7 +94,7 @@ export async function begin(ctx: ActionCtx): Promise<ActionContext> {
   const game = await getGameBySlug(kv, ctx.params.slug!);
   if (!game) throw new HttpError(404, "That game could not be found");
 
-  const access = await loadGroupAccess(ctx.state.auth, game.groupId);
+  const access = await loadGameAccess(ctx.state.auth, game);
 
   return { user, kv, form, game, access };
 }

@@ -36,7 +36,7 @@ function pastCutoffStart(): string {
 async function frozenGame(kv: Deno.Kv, count = 2) {
   const { game, organizer } = await seedGame(kv, {
     courts: 1,
-    playersPerCourt: 4,
+    maxPlayers: 4,
     pricePerPlayerFils: 3000,
     startUtc: pastCutoffStart(),
   });

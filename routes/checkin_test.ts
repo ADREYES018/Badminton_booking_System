@@ -64,7 +64,7 @@ function post(
 async function gameWithPlayer() {
   const { game, groupId, organizer } = await seedGame(kv, {
     courts: 1,
-    playersPerCourt: 4,
+    maxPlayers: 4,
   });
   const player = await seedPlayer(kv);
   await joinGame(kv, game.id, player);

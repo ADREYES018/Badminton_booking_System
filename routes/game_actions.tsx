@@ -15,7 +15,7 @@ import type { State } from "../main.ts";
 import {
   clientIp,
   HttpError,
-  requireOrganizer,
+  requireGameOrganizer,
 } from "../lib/auth/middleware.ts";
 import { act, backToGame, begin } from "./game_action.ts";
 import {
@@ -63,6 +63,10 @@ async function notifyOrganizerOfPayment(
   signup: Signup,
 ): Promise<void> {
   try {
+    // A clubless game has no owner-of-record to tell: whoever posted it is
+    // already the one being paid, and they see the claim on the game itself.
+    if (game.groupId === null) return;
+
     const group = await getGroup(kv, game.groupId);
     if (!group) return;
 
@@ -102,6 +106,24 @@ function backToSettlement(
   });
 }
 
+/**
+ * Where an organizer lands after settling one row.
+ *
+ * The settlement screen lives under a club, so a clubless game has none to
+ * return to and the organizer goes back to the game itself. The notice is the
+ * same either way — what changed is confirmed wherever they end up, rather
+ * than being dropped because the usual destination does not exist.
+ */
+function settlementRedirect(
+  group: { slug: string } | null,
+  slug: string,
+  notice: string,
+): Response {
+  return group
+    ? backToSettlement(group.slug, slug, { notice })
+    : backToGame(slug, { notice });
+}
+
 export function gameActionRoutes(app: App<State>) {
   // ---- Payment ------------------------------------------------------------
 
@@ -132,7 +154,7 @@ export function gameActionRoutes(app: App<State>) {
     "/games/:slug/payments/confirm",
     (ctx) =>
       act(ctx, async ({ user, kv, form, game }) => {
-        const { group } = await requireOrganizer(ctx.state.auth, game.groupId);
+        const { group } = await requireGameOrganizer(ctx.state.auth, game);
 
         const userId = form.get("userId")?.toString() ?? "";
         if (!userId) throw new HttpError(400, "No player was named.");
@@ -141,9 +163,7 @@ export function gameActionRoutes(app: App<State>) {
         return {
           action: "signup.payment_confirmed",
           notice: "Payment confirmed.",
-          redirect: backToSettlement(group.slug, game.slug, {
-            notice: "Payment confirmed.",
-          }),
+          redirect: settlementRedirect(group, game.slug, "Payment confirmed."),
         };
       }),
   );
@@ -152,7 +172,7 @@ export function gameActionRoutes(app: App<State>) {
     "/games/:slug/payments/refund",
     (ctx) =>
       act(ctx, async ({ kv, form, game }) => {
-        const { group } = await requireOrganizer(ctx.state.auth, game.groupId);
+        const { group } = await requireGameOrganizer(ctx.state.auth, game);
 
         const userId = form.get("userId")?.toString() ?? "";
         if (!userId) throw new HttpError(400, "No player was named.");
@@ -161,9 +181,7 @@ export function gameActionRoutes(app: App<State>) {
         return {
           action: "signup.refunded",
           notice: "Refund recorded.",
-          redirect: backToSettlement(group.slug, game.slug, {
-            notice: "Refund recorded.",
-          }),
+          redirect: settlementRedirect(group, game.slug, "Refund recorded."),
         };
       }),
   );
@@ -268,7 +286,7 @@ export function gameActionRoutes(app: App<State>) {
     const context = await begin(ctx);
     const { kv, form, game } = context;
 
-    await requireOrganizer(ctx.state.auth, game.groupId);
+    await requireGameOrganizer(ctx.state.auth, game);
 
     const reply = (status: number, body: Record<string, unknown>) =>
       new Response(JSON.stringify(body), {
@@ -329,11 +347,47 @@ export function gameActionRoutes(app: App<State>) {
 
   // ---- Attendance ---------------------------------------------------------
 
+  /**
+   * Marking attendance, one player or the whole roster.
+   *
+   * Two shapes, because the page has two. `islands/AttendancePanel.tsx` posts
+   * the roster in one go as `attended:<userId>` fields, so an organizer saves
+   * once instead of reloading the page per player. With scripting off the same
+   * island degrades to the per-player form it replaced, which posts `userId`
+   * and `attended` — so both must keep working, and the presence of `batch`
+   * says which one arrived.
+   *
+   * A player already in the state being written is a no-op inside
+   * `setAttendance`, so re-saving an unchanged roster costs nothing and moves
+   * no counters.
+   */
   app.post(
     "/games/:slug/attendance",
     (ctx) =>
       act(ctx, async ({ kv, form, game }) => {
-        await requireOrganizer(ctx.state.auth, game.groupId);
+        await requireGameOrganizer(ctx.state.auth, game);
+
+        if (form.get("batch") === "1") {
+          const marks: [string, boolean][] = [];
+          for (const [key, value] of form.entries()) {
+            if (!key.startsWith("attended:")) continue;
+            const userId = key.slice("attended:".length);
+            if (userId) marks.push([userId, value.toString() === "1"]);
+          }
+
+          for (const [userId, attended] of marks) {
+            await setAttendance(kv, game.id, userId, attended, {
+              groupId: game.groupId,
+            });
+          }
+
+          return {
+            action: "signup.attendance_overridden",
+            notice: marks.length === 1
+              ? "Attendance saved for 1 player."
+              : `Attendance saved for ${marks.length} players.`,
+          };
+        }
 
         const userId = form.get("userId")?.toString() ?? "";
         if (!userId) throw new HttpError(400, "No player was named.");

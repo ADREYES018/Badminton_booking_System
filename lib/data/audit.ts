@@ -25,9 +25,11 @@ export type AuditAction =
   | "member.role_changed"
   | "member.blocked"
   | "member.unblocked"
+  | "member.removed"
   | "game.created"
   | "game.updated"
   | "game.cancelled"
+  | "game.deleted"
   | "game.cutoff_overridden"
   | "game.unlocked"
   | "game.court_added"
@@ -55,7 +57,13 @@ export interface AuditInput {
   actorId: string;
   action: AuditAction;
   targetId?: string;
-  groupId?: string;
+  /**
+   * The club the action happened in, if any. `null` is accepted as well as
+   * absent so a caller can pass a clubless game's `groupId` straight through:
+   * both mean "no club", and forcing every call site to convert one into the
+   * other would be ceremony that buys nothing.
+   */
+  groupId?: string | null;
   before?: unknown;
   after?: unknown;
   ip?: string;
@@ -72,7 +80,10 @@ export async function audit(kv: Deno.Kv, input: AuditInput): Promise<void> {
     v: 1,
     actorId: input.actorId,
     targetId: input.targetId,
-    groupId: input.groupId,
+    // Normalized to undefined so a clubless entry stores no key at all rather
+    // than an explicit null, matching every entry written before clubless
+    // games existed.
+    groupId: input.groupId ?? undefined,
     action: input.action,
     before: input.before,
     after: input.after,

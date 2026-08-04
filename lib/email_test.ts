@@ -14,17 +14,18 @@ import type { Game } from "./types.ts";
 /** The fields the templates actually read. */
 function testGame(): Game {
   return {
-    v: 2,
+    v: 3,
     id: "g1",
     groupId: "grp1",
     slug: "sunday-x1",
     title: "Sunday Doubles",
+    sport: "badminton",
     venue: { name: "Al Quoz Courts", address: "Street 4, Al Quoz" },
     startUtc: "2026-08-09T14:00:00.000Z",
     endUtc: "2026-08-09T16:00:00.000Z",
     courts: 2,
     courtMode: "fixed",
-    playersPerCourt: 4,
+    maxPlayers: 8,
     courtStatus: "reserved",
     pricePerPlayerFils: 4500,
     maxGuestsPerPlayer: 1,

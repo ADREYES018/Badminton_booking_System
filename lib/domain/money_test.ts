@@ -61,7 +61,7 @@ Deno.test("expectedTakeFils counts every seat that is billed", () => {
 Deno.test("a held seat blocks a join but is not billed", () => {
   const seats = {
     courts: 1,
-    playersPerCourt: 4,
+    maxPlayers: 4,
     confirmedCount: 3,
     pendingCount: 1,
     guestCount: 0,
@@ -79,7 +79,7 @@ Deno.test("a held seat blocks a join but is not billed", () => {
 Deno.test("capacity and remaining seats account for guests", () => {
   const game = {
     courts: 2,
-    playersPerCourt: 8,
+    maxPlayers: 16,
     confirmedCount: 12,
     pendingCount: 0,
     guestCount: 2,
@@ -91,7 +91,7 @@ Deno.test("capacity and remaining seats account for guests", () => {
 Deno.test("seatsRemaining never goes negative", () => {
   const game = {
     courts: 1,
-    playersPerCourt: 4,
+    maxPlayers: 4,
     confirmedCount: 4,
     pendingCount: 0,
     guestCount: 2,

@@ -80,7 +80,7 @@ Deno.test("guest allowance is capped by the organizer's per-player limit", () =>
   const seats = {
     maxGuestsPerPlayer: 2,
     courts: 2,
-    playersPerCourt: 8,
+    maxPlayers: 16,
     confirmedCount: 4,
     pendingCount: 0,
     guestCount: 0,
@@ -94,7 +94,7 @@ Deno.test("guest allowance is capped by remaining seats", () => {
   const nearlyFull = {
     maxGuestsPerPlayer: 3,
     courts: 1,
-    playersPerCourt: 4,
+    maxPlayers: 4,
     confirmedCount: 3,
     pendingCount: 0,
     guestCount: 0,
@@ -107,7 +107,7 @@ Deno.test("a held seat removes a guest slot", () => {
   const withPending = {
     maxGuestsPerPlayer: 3,
     courts: 1,
-    playersPerCourt: 4,
+    maxPlayers: 4,
     confirmedCount: 2,
     pendingCount: 1,
     guestCount: 0,
@@ -119,7 +119,7 @@ Deno.test("maxGuestsPerPlayer of zero disables guests", () => {
   const noGuests = {
     maxGuestsPerPlayer: 0,
     courts: 2,
-    playersPerCourt: 8,
+    maxPlayers: 16,
     confirmedCount: 0,
     pendingCount: 0,
     guestCount: 0,
@@ -130,7 +130,7 @@ Deno.test("maxGuestsPerPlayer of zero disables guests", () => {
 Deno.test("hasRoom accounts for the seats a party actually needs", () => {
   const seats = {
     courts: 1,
-    playersPerCourt: 4,
+    maxPlayers: 4,
     confirmedCount: 2,
     pendingCount: 0,
     guestCount: 0,
