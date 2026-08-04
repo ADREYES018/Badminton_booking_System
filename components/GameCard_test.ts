@@ -32,7 +32,7 @@ function gameFixture(overrides: Partial<Game> = {}): Game {
     courtMode: "fixed",
     playersPerCourt: 4,
     courtStatus: "not_reserved",
-    totalCostFils: 12000,
+    pricePerPlayerFils: 3000,
     guestPricing: { mode: "free", feeFils: 0 },
     maxGuestsPerPlayer: 1,
     cutoffHours: 48,

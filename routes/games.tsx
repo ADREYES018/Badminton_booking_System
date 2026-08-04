@@ -1,14 +1,15 @@
 /**
- * A club's games.
+ * Games, listed two ways: everything everywhere at `/games`, and one club's
+ * own at `/g/:slug/games`.
  *
- * Two sections: games the player is already part of, then everything else
- * that is open. Splitting them means the answer to "what have I got on?" does
- * not have to be picked out of a list of everything.
+ * Both split into games the player is already part of and everything else, so
+ * the answer to "what have I got on?" does not have to be picked out of a list
+ * of everything.
  *
- * The club is named in the URL, so a link pasted into a chat resolves to the
- * same club for everyone who opens it. A signed-in non-member still sees the
- * public games — a club is private in who may play, not in whether it exists —
- * but every control that would commit them to a game is replaced by the way in.
+ * The global list is the one the app opens on. Membership no longer gates
+ * playing, so a club page is a view of who organizes what rather than a door,
+ * and it survives because a link pasted into a chat should still resolve to
+ * the club it names.
  */
 
 import type { App } from "fresh";
@@ -18,12 +19,10 @@ import { Alert, EmptyState, LinkButton } from "../components/ui.tsx";
 import { GameCard, viewerStateOf } from "../components/GameCard.tsx";
 import { requireUser, resolveGroupAccess } from "../lib/auth/middleware.ts";
 import { isProfileComplete } from "../lib/data/users.ts";
-import { listOpenGames } from "../lib/data/games.ts";
+import { listAllOpenGames, listOpenGames } from "../lib/data/games.ts";
 import { getSignup } from "../lib/data/signups.ts";
-import { getJoinRequest } from "../lib/data/groups.ts";
-import { redirectToGroup } from "../lib/routing/group_redirect.ts";
 import { sweepInBackground } from "../lib/data/sweep.ts";
-import type { Game, Group, JoinRequest, Signup, User } from "../lib/types.ts";
+import type { Game, Signup } from "../lib/types.ts";
 
 interface Listed {
   game: Game;
@@ -65,36 +64,6 @@ function Section(
   );
 }
 
-/** What a signed-in non-member is offered instead of a roster. */
-function JoinPrompt(props: { group: Group; request: JoinRequest | null }) {
-  if (props.request?.status === "pending") {
-    return (
-      <Alert tone="info">
-        Your request to join {props.group.name} is with the organizers.
-      </Alert>
-    );
-  }
-
-  return (
-    <Alert tone="info">
-      <div class="flex flex-col gap-3">
-        <p>
-          You are not in {props.group.name}{" "}
-          yet, so you cannot sign up for these games. Ask an organizer for an
-          invite link, or request a place.
-        </p>
-        <LinkButton
-          href={`/g/${props.group.slug}/request`}
-          variant="primary"
-          class="w-fit"
-        >
-          Request to join
-        </LinkButton>
-      </div>
-    </Alert>
-  );
-}
-
 export function gamesRoute(app: App<State>) {
   app.get("/g/:groupSlug/games", async (ctx) => {
     const user = requireUser(ctx.state.auth);
@@ -125,10 +94,6 @@ export function gamesRoute(app: App<State>) {
     // Correct anything the queue missed — an overdue freeze, a lapsed offer.
     // Fire-and-forget: this page renders from what was already read.
     for (const entry of entries) sweepInBackground(kv, entry.game);
-
-    const request = access.membership
-      ? null
-      : await getJoinRequest(kv, group.id, user.id);
 
     const mine = entries.filter(isMine);
     const rest = entries.filter((entry) => !isMine(entry));
@@ -168,8 +133,6 @@ export function gamesRoute(app: App<State>) {
             <Alert tone="success">You are in. Pick a game below.</Alert>
           )}
 
-          {!access.membership && <JoinPrompt group={group} request={request} />}
-
           <Section
             title="Your games"
             entries={mine}
@@ -201,7 +164,67 @@ export function gamesRoute(app: App<State>) {
     );
   });
 
-  // Kept so links and bookmarks from before clubs had URLs still work, and so
-  // the bottom navigation can stay club-agnostic.
-  app.get("/games", (ctx) => redirectToGroup(ctx, "games"));
+  /**
+   * Every open game, across every club.
+   *
+   * What the app opens on. Games used to be reachable only inside a club the
+   * viewer had joined, which meant a new player's first screen was a request
+   * to be let in somewhere. Listing them all means there is always something
+   * to join, and the club a game belongs to is a detail on the card rather
+   * than a gate in front of it.
+   */
+  app.get("/games", async (ctx) => {
+    const user = requireUser(ctx.state.auth);
+    const kv = ctx.state.auth.kv;
+
+    if (!isProfileComplete(user)) return ctx.redirect("/profile/setup");
+
+    const games = await listAllOpenGames(kv);
+    const entries: Listed[] = await Promise.all(
+      games.map(async (game) => ({
+        game,
+        signup: await getSignup(kv, game.id, user.id),
+      })),
+    );
+
+    for (const entry of entries) sweepInBackground(kv, entry.game);
+
+    const mine = entries.filter(isMine);
+    const rest = entries.filter((entry) => !isMine(entry));
+
+    return ctx.render(
+      <Page user={user} nav="games">
+        <div class="flex flex-col gap-8">
+          <div>
+            <h1 class="text-headline-lg font-headline text-on-surface">
+              Games
+            </h1>
+            <p class="text-body-md text-on-surface-variant mt-1">
+              Everything coming up. Join any of them.
+            </p>
+          </div>
+
+          <Section
+            title="Your games"
+            entries={mine}
+            description="Games you have joined or are waiting on."
+          />
+
+          <Section
+            title={mine.length > 0 ? "Other games" : "Open games"}
+            entries={rest}
+          />
+
+          {entries.length === 0 && (
+            <EmptyState title="No games yet">
+              <p>
+                Once anyone posts a game it will appear here with its venue,
+                cost and remaining spots.
+              </p>
+            </EmptyState>
+          )}
+        </div>
+      </Page>,
+    );
+  });
 }

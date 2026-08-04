@@ -36,7 +36,7 @@ import { aedToFils } from "../../lib/domain/money.ts";
 import { APP_TIMEZONE, cutoffAt } from "../../lib/domain/time.ts";
 import { cleanText } from "../../lib/domain/validate.ts";
 import { SKILL_ORDER } from "../../lib/types.ts";
-import type { Game, GuestPricingMode, Skill, User } from "../../lib/types.ts";
+import type { Game, GameVisibility, Skill, User } from "../../lib/types.ts";
 
 interface FormProps {
   user: User;
@@ -181,76 +181,32 @@ function GameForm(props: FormProps) {
             </div>
 
             <Field
-              label="Total court cost (AED)"
-              name="totalCost"
+              label="Price per player (AED)"
+              name="pricePerPlayer"
               type="number"
               min={0}
               step="0.01"
               required
               value={field(
-                "totalCost",
-                game ? String(game.totalCostFils / 100) : "",
+                "pricePerPlayer",
+                game ? String(game.pricePerPlayerFils / 100) : "",
               )}
-              hint="What the venue charges in total. Split between the players."
+              hint="What one seat costs. Every player pays this, guests included."
             />
 
-            <fieldset class="border border-outline-variant rounded-lg p-4 flex flex-col gap-4">
-              <legend class="text-label font-bold text-on-surface-variant px-2">
-                Guests
-              </legend>
-
-              <Field
-                label="Guests allowed per player"
-                name="maxGuests"
-                type="number"
-                min={0}
-                max={4}
-                required
-                value={field(
-                  "maxGuests",
-                  String(game?.maxGuestsPerPlayer ?? 1),
-                )}
-                hint="0 turns guests off. A guest takes a real seat."
-              />
-
-              <Select
-                label="How a guest is charged"
-                name="guestMode"
-                hint="Applies to every guest in this game."
-              >
-                <option
-                  value="full_share"
-                  selected={game?.guestPricing.mode === "full_share"}
-                >
-                  A full share, same as a member
-                </option>
-                <option
-                  value="flat_fee"
-                  selected={game?.guestPricing.mode === "flat_fee"}
-                >
-                  A fixed fee
-                </option>
-                <option
-                  value="free"
-                  selected={!game || game.guestPricing.mode === "free"}
-                >
-                  Nothing — the members cover it
-                </option>
-              </Select>
-
-              <Field
-                label="Guest fee (AED)"
-                name="guestFee"
-                type="number"
-                min={0}
-                step="0.01"
-                value={field(
-                  "guestFee",
-                  game ? String(game.guestPricing.feeFils / 100) : "0",
-                )}
-                hint="Only used when guests pay a fixed fee."
-              />
-            </fieldset>
+            <Field
+              label="Guests allowed per player"
+              name="maxGuests"
+              type="number"
+              min={0}
+              max={4}
+              required
+              value={field(
+                "maxGuests",
+                String(game?.maxGuestsPerPlayer ?? 1),
+              )}
+              hint="0 turns guests off. A guest takes a real seat and pays the same."
+            />
 
             <div class="grid gap-5 sm:grid-cols-2">
               <Select label="Minimum skill" name="skillMin">
@@ -307,12 +263,33 @@ function GameForm(props: FormProps) {
                 Public — listed for everyone
               </option>
               <option
+                value="password"
+                selected={game?.visibility === "password"}
+              >
+                Listed, but a code is needed to join
+              </option>
+              <option
                 value="unlisted"
                 selected={game?.visibility === "unlisted"}
               >
                 Unlisted — link only
               </option>
             </Select>
+
+            {game?.visibility === "password" && game.joinCode && (
+              <Card class="flex flex-col gap-1">
+                <span class="text-label font-bold text-on-surface-variant">
+                  Join code
+                </span>
+                <span class="text-headline-md font-headline text-on-surface tabular-nums tracking-[0.2em]">
+                  {game.joinCode}
+                </span>
+                <span class="text-label-sm text-on-surface-variant">
+                  Share this with the players you want in. Anyone can see the
+                  game; only this code lets them take a seat.
+                </span>
+              </Card>
+            )}
 
             <Button type="submit" fullWidth>
               {editing ? "Save changes" : "Post this game"}
@@ -359,14 +336,12 @@ interface ParsedGame {
   endUtc: string;
   courts: number;
   playersPerCourt: number;
-  totalCostFils: number;
+  pricePerPlayerFils: number;
   maxGuestsPerPlayer: number;
-  guestMode: GuestPricingMode;
-  guestFeeFils: number;
   cutoffHours: number;
   skillMin?: Skill;
   skillMax?: Skill;
-  visibility: "public" | "unlisted";
+  visibility: GameVisibility;
 }
 
 /** Validates the form. Returns either the parsed game or a message to show. */
@@ -399,24 +374,14 @@ function parseForm(form: FormData): ParsedGame | { error: string } {
     return { error: "A court needs at least two players." };
   }
 
-  const totalCost = Number(form.get("totalCost"));
-  if (!Number.isFinite(totalCost) || totalCost < 0) {
-    return { error: "Check the total court cost." };
+  const pricePerPlayer = Number(form.get("pricePerPlayer"));
+  if (!Number.isFinite(pricePerPlayer) || pricePerPlayer < 0) {
+    return { error: "Check the price per player." };
   }
 
   const maxGuestsPerPlayer = Number(form.get("maxGuests"));
   if (!Number.isInteger(maxGuestsPerPlayer) || maxGuestsPerPlayer < 0) {
     return { error: "Guests per player must be zero or more." };
-  }
-
-  const guestMode = form.get("guestMode")?.toString() as GuestPricingMode;
-  if (!["full_share", "flat_fee", "free"].includes(guestMode)) {
-    return { error: "Pick how guests are charged." };
-  }
-
-  const guestFee = Number(form.get("guestFee") ?? 0);
-  if (!Number.isFinite(guestFee) || guestFee < 0) {
-    return { error: "Check the guest fee." };
   }
 
   const cutoffHours = Number(form.get("cutoffHours"));
@@ -440,9 +405,11 @@ function parseForm(form: FormData): ParsedGame | { error: string } {
     return { error: "The minimum skill is above the maximum." };
   }
 
-  const visibility = form.get("visibility")?.toString() === "unlisted"
-    ? "unlisted"
-    : "public";
+  const visibilityRaw = form.get("visibility")?.toString() ?? "";
+  const visibility: GameVisibility =
+    visibilityRaw === "unlisted" || visibilityRaw === "password"
+      ? visibilityRaw
+      : "public";
 
   return {
     title,
@@ -452,10 +419,8 @@ function parseForm(form: FormData): ParsedGame | { error: string } {
     endUtc,
     courts,
     playersPerCourt,
-    totalCostFils: aedToFils(totalCost),
+    pricePerPlayerFils: aedToFils(pricePerPlayer),
     maxGuestsPerPlayer,
-    guestMode,
-    guestFeeFils: aedToFils(guestFee),
     cutoffHours,
     skillMin,
     skillMax,
@@ -552,8 +517,7 @@ export function organizerGameRoutes(app: App<State>) {
       endUtc: parsed.endUtc,
       courts: parsed.courts,
       playersPerCourt: parsed.playersPerCourt,
-      totalCostFils: parsed.totalCostFils,
-      guestPricing: { mode: parsed.guestMode, feeFils: parsed.guestFeeFils },
+      pricePerPlayerFils: parsed.pricePerPlayerFils,
       maxGuestsPerPlayer: parsed.maxGuestsPerPlayer,
       cutoffHours: parsed.cutoffHours,
       skillMin: parsed.skillMin,
@@ -637,11 +601,7 @@ export function organizerGameRoutes(app: App<State>) {
       endUtc: parsed.endUtc,
       courts: parsed.courts,
       playersPerCourt: parsed.playersPerCourt,
-      totalCostFils: parsed.totalCostFils,
-      guestPricing: {
-        mode: parsed.guestMode,
-        feeFils: parsed.guestFeeFils,
-      },
+      pricePerPlayerFils: parsed.pricePerPlayerFils,
       maxGuestsPerPlayer: parsed.maxGuestsPerPlayer,
       cutoffHours: parsed.cutoffHours,
       skillMin: parsed.skillMin ?? null,
@@ -667,10 +627,13 @@ export function organizerGameRoutes(app: App<State>) {
       action: "game.updated",
       targetId: game.id,
       groupId: group.id,
-      before: { startUtc: game.startUtc, totalCostFils: game.totalCostFils },
+      before: {
+        startUtc: game.startUtc,
+        pricePerPlayerFils: game.pricePerPlayerFils,
+      },
       after: {
         startUtc: updated.startUtc,
-        totalCostFils: updated.totalCostFils,
+        pricePerPlayerFils: updated.pricePerPlayerFils,
       },
       ip: clientIp(ctx.req),
     });

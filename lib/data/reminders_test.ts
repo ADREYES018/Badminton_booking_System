@@ -37,7 +37,7 @@ async function frozenGame(kv: Deno.Kv, count = 2) {
   const { game, organizer } = await seedGame(kv, {
     courts: 1,
     playersPerCourt: 4,
-    totalCostFils: 12000,
+    pricePerPlayerFils: 3000,
     startUtc: pastCutoffStart(),
   });
   const players = await seedPlayers(kv, count);
@@ -185,17 +185,17 @@ Deno.test("a refund leaves the money neither owed nor collected", async () => {
     await confirmPaid(kv, game.id, players[1]!.id, organizer.id);
 
     const before = await settlementFor(kv, game.id);
-    assertEquals(before.collectedFils, 12000);
+    assertEquals(before.collectedFils, 6000);
     assertEquals(before.outstandingFils, 0);
 
     await refundPayment(kv, game.id, players[0]!.id);
     const after = await settlementFor(kv, game.id);
 
     // The refunded share drops out of both sides, not just one.
-    assertEquals(after.owedFils, 6000);
-    assertEquals(after.collectedFils, 6000);
+    assertEquals(after.owedFils, 3000);
+    assertEquals(after.collectedFils, 3000);
     assertEquals(after.outstandingFils, 0);
-    assertEquals(after.refundedFils, 6000);
+    assertEquals(after.refundedFils, 3000);
     assertEquals(after.refundedCount, 1);
   });
 });
@@ -210,7 +210,7 @@ Deno.test("a bulk refund returns only the money that actually arrived", async ()
     const result = await refundAllForGame(kv, game.id);
 
     assertEquals(result.refunded.length, 2);
-    assertEquals(result.totalFils, 8000);
+    assertEquals(result.totalFils, 6000);
     // The unpaid player is left alone — there is nothing to send back.
     const unpaid = await getSignup(kv, game.id, players[2]!.id);
     assertEquals(unpaid?.payment, "unpaid");

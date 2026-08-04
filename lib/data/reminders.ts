@@ -21,7 +21,7 @@ import { listRoster } from "./signups.ts";
 import { getUser } from "./users.ts";
 import { sendEmail } from "../email.ts";
 import { reminderEmail } from "../email.ts";
-import { currentSplit } from "../domain/money.ts";
+import { amountOwed } from "../domain/money.ts";
 
 /**
  * Claims a reminder tag for one signup.
@@ -82,7 +82,6 @@ export async function sendReminder(
   if (new Date() >= new Date(game.startUtc)) return { sent: 0, skipped: 0 };
 
   const confirmed = await listRoster(kv, gameId, "confirmed");
-  const split = currentSplit(game);
 
   let sent = 0;
   let skipped = 0;
@@ -101,8 +100,9 @@ export async function sendReminder(
       continue;
     }
 
-    const owed = signup.owedFils ?? split.perHeadFils;
-    await sendEmail(reminderEmail(user.email, game, tag, owed));
+    await sendEmail(
+      reminderEmail(user.email, game, tag, amountOwed(signup, game)),
+    );
     sent++;
   }
 

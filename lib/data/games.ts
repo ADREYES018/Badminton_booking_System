@@ -25,7 +25,6 @@ import type {
   Game,
   GameStatus,
   GameVisibility,
-  GuestPricing,
   Skill,
   Venue,
 } from "../types.ts";
@@ -34,9 +33,17 @@ import { nowIso } from "../domain/time.ts";
 import { randomToken } from "../crypto.ts";
 import { slugify } from "../domain/validate.ts";
 
-/** Public listings only carry games anyone may find. */
+/**
+ * Whether a game belongs in the listings anyone can browse.
+ *
+ * A password game is listed. Its code gates the roster and the seat, not the
+ * knowledge that the game exists — an organizer shares the code with people
+ * who already know about the game, and hiding it as well would leave them
+ * nothing to apply the code to. Only `unlisted` is truly hidden, where the URL
+ * itself is the access control.
+ */
 function isListedPublicly(game: Pick<Game, "visibility" | "status">): boolean {
-  return game.visibility === "public" && game.status !== "draft" &&
+  return game.visibility !== "unlisted" && game.status !== "draft" &&
     game.status !== "cancelled";
 }
 
@@ -65,8 +72,7 @@ export interface CreateGameInput {
   endUtc: string;
   courts: number;
   playersPerCourt: number;
-  totalCostFils: number;
-  guestPricing: GuestPricing;
+  pricePerPlayerFils: number;
   cutoffHours: number;
   createdBy: string;
   courtMode?: CourtMode;
@@ -74,8 +80,19 @@ export interface CreateGameInput {
   skillMin?: Skill;
   skillMax?: Skill;
   visibility?: GameVisibility;
-  joinPasswordHash?: string;
   status?: GameStatus;
+}
+
+/**
+ * The six digits that unlock a password game.
+ *
+ * Leading zeros are kept — a code shown as "004821" has to be typed back as
+ * six characters, and dropping to a five-digit number would make some codes
+ * look malformed next to others.
+ */
+export function generateJoinCode(): string {
+  const digits = crypto.getRandomValues(new Uint32Array(1))[0]! % 1_000_000;
+  return digits.toString().padStart(6, "0");
 }
 
 /**
@@ -99,7 +116,7 @@ export async function createGame(
   const visibility = input.visibility ?? "public";
 
   const game: Game = {
-    v: 1,
+    v: 2,
     id: ulid(),
     groupId: input.groupId,
     slug: gameSlug(input.title, visibility),
@@ -113,8 +130,7 @@ export async function createGame(
     playersPerCourt: input.playersPerCourt,
     courtStatus: "not_reserved",
 
-    totalCostFils: input.totalCostFils,
-    guestPricing: input.guestPricing,
+    pricePerPlayerFils: input.pricePerPlayerFils,
     maxGuestsPerPlayer: input.maxGuestsPerPlayer ??
       DEFAULT_MAX_GUESTS_PER_PLAYER,
 
@@ -122,7 +138,7 @@ export async function createGame(
     skillMax: input.skillMax,
 
     visibility,
-    joinPasswordHash: input.joinPasswordHash,
+    joinCode: visibility === "password" ? generateJoinCode() : undefined,
 
     cutoffHours: input.cutoffHours,
     status: input.status ?? "open",
@@ -144,7 +160,9 @@ export async function createGame(
     .set(keys.gamesByGroup(game.groupId, game.startUtc, game.id), game.id);
 
   if (isListedPublicly(game)) {
-    op = op.set(keys.gamesOpen(game.groupId, game.startUtc, game.id), game.id);
+    op = op
+      .set(keys.gamesOpen(game.groupId, game.startUtc, game.id), game.id)
+      .set(keys.gamesAll(game.startUtc, game.id), game.id);
   }
 
   const result = await op.commit();
@@ -162,8 +180,7 @@ export interface UpdateGameInput {
   endUtc?: string;
   courts?: number;
   playersPerCourt?: number;
-  totalCostFils?: number;
-  guestPricing?: GuestPricing;
+  pricePerPlayerFils?: number;
   maxGuestsPerPlayer?: number;
   cutoffHours?: number;
   courtStatus?: Game["courtStatus"];
@@ -210,18 +227,25 @@ export async function updateGame(
     if (update.playersPerCourt !== undefined) {
       next.playersPerCourt = update.playersPerCourt;
     }
-    if (update.totalCostFils !== undefined) {
-      next.totalCostFils = update.totalCostFils;
-    }
-    if (update.guestPricing !== undefined) {
-      next.guestPricing = update.guestPricing;
+    if (update.pricePerPlayerFils !== undefined) {
+      next.pricePerPlayerFils = update.pricePerPlayerFils;
     }
     if (update.maxGuestsPerPlayer !== undefined) {
       next.maxGuestsPerPlayer = update.maxGuestsPerPlayer;
     }
     if (update.cutoffHours !== undefined) next.cutoffHours = update.cutoffHours;
     if (update.courtStatus !== undefined) next.courtStatus = update.courtStatus;
-    if (update.visibility !== undefined) next.visibility = update.visibility;
+    // A game that becomes password-protected needs a code; one that stops
+    // being password-protected must not keep a stale code lying around for a
+    // later switch back to silently re-admit everyone who was ever told it.
+    if (update.visibility !== undefined) {
+      next.visibility = update.visibility;
+      if (next.visibility === "password") {
+        next.joinCode = current.joinCode ?? generateJoinCode();
+      } else {
+        next.joinCode = undefined;
+      }
+    }
     if (update.status !== undefined) next.status = update.status;
     if (update.skillMin !== undefined) {
       next.skillMin = update.skillMin ?? undefined;
@@ -247,12 +271,14 @@ export async function updateGame(
     // A game never moves between groups, so the group segment of the key is
     // the same on both sides and only `startUtc` can move the pointer.
     if (wasListed && (!isListed || next.startUtc !== current.startUtc)) {
-      op = op.delete(
-        keys.gamesOpen(current.groupId, current.startUtc, gameId),
-      );
+      op = op
+        .delete(keys.gamesOpen(current.groupId, current.startUtc, gameId))
+        .delete(keys.gamesAll(current.startUtc, gameId));
     }
     if (isListed && (!wasListed || next.startUtc !== current.startUtc)) {
-      op = op.set(keys.gamesOpen(next.groupId, next.startUtc, gameId), gameId);
+      op = op
+        .set(keys.gamesOpen(next.groupId, next.startUtc, gameId), gameId)
+        .set(keys.gamesAll(next.startUtc, gameId), gameId);
     }
 
     return { op, result: next };
@@ -287,9 +313,9 @@ export async function cancelGame(
 
     let op = kv.atomic().check(entry).set(keys.game(gameId), next);
     if (isListedPublicly(current)) {
-      op = op.delete(
-        keys.gamesOpen(current.groupId, current.startUtc, gameId),
-      );
+      op = op
+        .delete(keys.gamesOpen(current.groupId, current.startUtc, gameId))
+        .delete(keys.gamesAll(current.startUtc, gameId));
     }
 
     return { op, result: next };
@@ -315,6 +341,25 @@ export async function listOpenGames(
     start: keys.gamesOpen(groupId, from, ""),
     end: keys.gamesOpen(groupId, "9999", ""),
   }, { limit: options.limit ?? 50 });
+
+  return await hydrate(kv, pointers.map((p) => p.value));
+}
+
+/**
+ * Upcoming listed games everywhere, soonest first.
+ *
+ * What the app opens on. Games are browsed across clubs rather than within
+ * one, so a player who has joined nothing still lands on something to join.
+ */
+export async function listAllOpenGames(
+  kv: Deno.Kv,
+  options: { limit?: number; from?: Date } = {},
+): Promise<Game[]> {
+  const from = (options.from ?? new Date()).toISOString();
+  const pointers = await listRecords<string>(kv, {
+    start: keys.gamesAll(from, ""),
+    end: keys.gamesAll("9999", ""),
+  }, { limit: options.limit ?? 100 });
 
   return await hydrate(kv, pointers.map((p) => p.value));
 }

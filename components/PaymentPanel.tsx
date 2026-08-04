@@ -1,22 +1,22 @@
 /**
  * What one player owes for a game, and the single action open to them.
  *
- * This renders only once the roster has frozen. Before that there is no bill —
- * only an estimate that moves as people join — and `markPaid` refuses a signup
- * with no `owedFils`, so offering the action earlier would be offering
- * something the backend will reject.
+ * Players pay up front, so this renders as soon as someone holds a seat rather
+ * than waiting for the cutoff. That is only honest because the price is fixed:
+ * there was a period when the figure moved as people joined, and asking for
+ * money against a number that could still change would have been asking twice.
  *
- * The figure shown is the player's own `owedFils`, never the game's per-head
- * number. A player who brought a guest owes their share plus the guest's, and
- * under flat-fee or free guest pricing that is not a multiple of anything.
+ * The figure is the player's own — their seat plus their guests' — never the
+ * game's per-seat price, which is not what a player with a +1 owes.
  */
 
 import { Alert, Button, Card, Chip } from "./ui.tsx";
-import { formatFils } from "../lib/domain/money.ts";
-import type { PayoutDetails, Signup } from "../lib/types.ts";
+import { amountOwed, formatFils } from "../lib/domain/money.ts";
+import type { Game, PayoutDetails, Signup } from "../lib/types.ts";
 
 export interface PaymentPanelProps {
   signup: Signup;
+  game: Pick<Game, "pricePerPlayerFils">;
   slug: string;
   csrf: string;
   csrfField: string;
@@ -26,11 +26,17 @@ export interface PaymentPanelProps {
 /**
  * Whether this signup has a bill to show at all.
  *
+ * A held seat is not a bill. Someone offered a promotion has not accepted it,
+ * and a cancelled signup owes nothing unless the cutoff already forfeited it,
+ * which is recorded on the payment state rather than inferred here.
+ *
  * Exported so the page can decide whether to render the section without
  * duplicating the rule.
  */
 export function hasBill(signup: Signup | null): signup is Signup {
-  return signup !== null && signup.owedFils !== undefined;
+  if (!signup) return false;
+  return signup.status === "confirmed" || signup.status === "attended" ||
+    signup.payment === "forfeited" || signup.payment === "refunded";
 }
 
 /** Where the money goes. Absent until an organizer fills the group in. */
@@ -58,14 +64,14 @@ function PayoutDetailsList(props: { payout: PayoutDetails }) {
 }
 
 export function PaymentPanel(props: PaymentPanelProps) {
-  const { signup, slug, csrf, csrfField, payout } = props;
-  const owed = signup.owedFils ?? 0;
+  const { signup, game, slug, csrf, csrfField, payout } = props;
+  const owed = amountOwed(signup, game);
 
   return (
     <Card accent class="flex flex-col gap-4">
       <div class="flex items-start justify-between gap-4">
         <div class="flex flex-col gap-0.5">
-          <h2 class="text-label-sm text-on-surface-variant">Your share</h2>
+          <h2 class="text-label-sm text-on-surface-variant">You owe</h2>
           <p class="text-headline-md font-headline text-on-surface">
             {formatFils(owed)}
           </p>
@@ -87,8 +93,8 @@ export function PaymentPanel(props: PaymentPanelProps) {
             <Button type="submit" fullWidth>I have paid</Button>
           </form>
           <p class="text-label-sm text-on-surface-variant">
-            Transfer the amount, then tell us here. The organizer confirms it
-            once it lands.
+            Pay before the game. Transfer the amount, then tell us here — the
+            organizer confirms it once it lands.
           </p>
         </>
       )}

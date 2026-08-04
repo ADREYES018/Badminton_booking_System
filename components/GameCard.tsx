@@ -10,11 +10,7 @@
  */
 
 import type { Game, Signup } from "../lib/types.ts";
-import {
-  displaySplit,
-  formatFils,
-  seatsRemaining,
-} from "../lib/domain/money.ts";
+import { formatFils, seatsRemaining } from "../lib/domain/money.ts";
 import { capacityOf, seatsTaken } from "../lib/domain/money.ts";
 import { formatGameTime, formatRelative } from "../lib/domain/time.ts";
 import { cutoffAt } from "../lib/domain/time.ts";
@@ -115,29 +111,18 @@ export function ViewerStateChip(props: { state: ViewerState }) {
 }
 
 /**
- * The per-head figure.
+ * What a seat costs.
  *
- * Before the cutoff this moves as people join, so it is labelled an estimate —
- * showing a firm price that later changes is worse than admitting it is not
- * settled yet.
+ * The organizer sets this outright, so it is stated plainly — there is no
+ * estimate to hedge and no figure that moves as the roster fills.
  */
 export function CostLine(props: { game: Game; class?: string }) {
-  const { game } = props;
-  const split = displaySplit(game);
-  const frozen = game.frozenPerHeadFils !== undefined;
-  const empty = !frozen && game.confirmedCount === 0;
-
   return (
     <div class={cx("flex items-baseline gap-2", props.class)}>
       <span class="text-headline-md text-on-surface font-headline">
-        {formatFils(split.perHeadFils)}
+        {formatFils(props.game.pricePerPlayerFils)}
       </span>
-      <span class="text-label-sm text-on-surface-variant">
-        {frozen ? "per player" : empty
-          // Quoting the full cost would be wrong, and quoting zero worse.
-          ? "if you join alone — less as others do"
-          : "per player, estimated"}
-      </span>
+      <span class="text-label-sm text-on-surface-variant">per player</span>
     </div>
   );
 }

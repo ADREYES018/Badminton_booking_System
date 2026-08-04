@@ -57,7 +57,7 @@ import {
   nowIso,
   promotionWindow,
 } from "../domain/time.ts";
-import { amountOwed, currentSplit } from "../domain/money.ts";
+import { amountOwed } from "../domain/money.ts";
 import {
   guestsAllowed,
   JOIN_BLOCK_MESSAGES,
@@ -829,11 +829,9 @@ export async function freezeRoster(
     const current = entry.value;
     if (!current || current.rosterFrozenAt) return null;
 
-    const split = currentSplit(current);
     const now = nowIso();
     const next: Game = {
       ...current,
-      frozenPerHeadFils: split.perHeadFils,
       rosterFrozenAt: now,
       updatedAt: now,
     };
@@ -841,8 +839,12 @@ export async function freezeRoster(
     let op = kv.atomic().check(entry).set(keys.game(gameId), next);
 
     // Only confirmed players owe anything. A held seat is not a bill: the
-    // player never accepted it, which is the whole reason pendingCount is
-    // kept out of the cost divisor.
+    // player never accepted it, and an offer that lapses must not leave a
+    // charge behind.
+    //
+    // Stamping `owedFils` here is what makes a later price change safe. The
+    // price no longer moves with the roster, but an organizer can still edit
+    // it, and everyone who joined under the old figure keeps it.
     const confirmed = await listRoster(kv, gameId, "confirmed");
     for (const signup of confirmed) {
       const entryForSignup = await getRecord<Signup>(
@@ -858,7 +860,7 @@ export async function freezeRoster(
           keys.signup(gameId, signup.userId),
           {
             ...entryForSignup.value,
-            owedFils: amountOwed(entryForSignup.value, split),
+            owedFils: amountOwed(entryForSignup.value, current),
             updatedAt: now,
           } satisfies Signup,
         );
@@ -911,15 +913,18 @@ export async function markPaid(
       if (signup.status !== "confirmed") {
         throw new SignupError("Only confirmed players have a share to pay.");
       }
-      if (signup.owedFils === undefined) {
-        throw new SignupError(
-          "The roster has not closed yet, so there is nothing to pay.",
-        );
-      }
       // Already confirmed by the organizer: a later claim must not undo that.
       if (signup.payment === "paid" || signup.payment === "refunded") {
         return null;
       }
+
+      // Players pay before the cutoff, so the bill is settled here rather than
+      // waiting for the freeze to stamp it. Recording the figure at the moment
+      // of the claim is what ties the payment to a specific amount: a later
+      // price change, or a guest added afterwards, cannot retroactively make
+      // what they sent the wrong number.
+      const game = await getRecord<Game>(kv, keys.game(gameId));
+      if (!game.value) throw new SignupError("That game no longer exists.");
 
       return {
         op: kv.atomic().check(entry).set(
@@ -927,6 +932,7 @@ export async function markPaid(
           {
             ...signup,
             payment: "marked_paid",
+            owedFils: amountOwed(signup, game.value),
             paidMarkedAt: nowIso(),
             updatedAt: nowIso(),
           } satisfies Signup,
@@ -957,10 +963,14 @@ export async function confirmPaid(
       const entry = await getRecord<Signup>(kv, keys.signup(gameId, userId));
       const signup = entry.value;
       if (!signup) throw new SignupError("That player is not on this roster.");
-      if (signup.owedFils === undefined) {
-        throw new SignupError("The roster has not closed yet.");
-      }
       if (signup.payment === "paid") return null;
+
+      // An organizer can confirm money that arrived before the player said
+      // anything, so the bill may not have been recorded yet. Settling it here
+      // as well means the confirmed figure is the one that was owed when the
+      // organizer saw the transfer.
+      const game = await getRecord<Game>(kv, keys.game(gameId));
+      if (!game.value) throw new SignupError("That game no longer exists.");
 
       const now = nowIso();
       return {
@@ -969,6 +979,7 @@ export async function confirmPaid(
           {
             ...signup,
             payment: "paid",
+            owedFils: amountOwed(signup, game.value),
             paidConfirmedAt: now,
             paidConfirmedBy: confirmedBy,
             updatedAt: now,
@@ -1072,11 +1083,19 @@ export interface Settlement {
  * confirms it, the money is only claimed. Reporting it as collected would
  * make the figure that matters most, "how much am I still out of pocket",
  * the one most likely to be wrong.
+ *
+ * This is meaningful from the moment the first player joins rather than only
+ * after the cutoff: players pay up front, so an organizer needs to see who has
+ * settled while there is still time to chase the rest.
  */
 export async function settlementFor(
   kv: Deno.Kv,
   gameId: string,
 ): Promise<Settlement> {
+  const gameEntry = await getRecord<Game>(kv, keys.game(gameId));
+  const game = gameEntry.value;
+  if (!game) throw new SignupError("That game no longer exists.");
+
   const confirmed = await listRoster(kv, gameId, "confirmed");
 
   let owedFils = 0;
@@ -1088,7 +1107,11 @@ export async function settlementFor(
   let refundedCount = 0;
 
   for (const signup of confirmed) {
-    const owed = signup.owedFils ?? 0;
+    // A player who has neither paid nor been through the freeze carries no
+    // recorded bill yet, but they hold a seat and the price is known — so what
+    // they owe is the price, not nothing. Counting them as zero would tell an
+    // organizer they were square when half the roster had not paid.
+    const owed = amountOwed(signup, game);
 
     if (signup.payment === "refunded") {
       // Money that came in and went back out again. It is neither owed nor

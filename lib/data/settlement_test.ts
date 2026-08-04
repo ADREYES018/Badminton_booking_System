@@ -1,14 +1,14 @@
 /**
- * Settlement: what each player owes once the roster closes, and how that gets
- * marked and confirmed.
+ * Settlement: what each player owes, and how that gets marked and confirmed.
  *
- * The rule under test throughout is that the cutoff decides the bill. Every
- * case that follows exists because the alternative — recomputing as the roster
- * churns — silently changes what someone owes after they may already have
- * transferred the money.
+ * The rule under test throughout is that a bill, once settled, does not move.
+ * It is settled by whichever comes first — the player paying, the organizer
+ * confirming, or the cutoff freezing the roster — and nothing afterwards may
+ * rewrite it. The alternative silently changes what someone owes after they
+ * may already have transferred the money.
  */
 
-import { assertEquals, assertRejects } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import {
   confirmPaid,
   freezeRoster,
@@ -16,9 +16,8 @@ import {
   leaveGame,
   markPaid,
   settlementFor,
-  SignupError,
 } from "./signups.ts";
-import { getGame } from "./games.ts";
+import { getGame, updateGame } from "./games.ts";
 import { getSignup } from "./signups.ts";
 import { seedGame, seedPlayers } from "../testing/fixtures.ts";
 import { withTestKv } from "../testing/kv_test_helper.ts";
@@ -59,11 +58,10 @@ async function makeCutoffDue(kv: Deno.Kv, gameId: string): Promise<void> {
 
 Deno.test("freezing writes each player their own share", async () => {
   await withTestKv(async (kv) => {
-    // 12000 fils over 4 players = 3000 each.
     const { game } = await seedGame(kv, {
       courts: 1,
       playersPerCourt: 4,
-      totalCostFils: 12000,
+      pricePerPlayerFils: 3000,
       cutoffHours: 48,
       startUtc: pastCutoffStart(),
     });
@@ -76,18 +74,16 @@ Deno.test("freezing writes each player their own share", async () => {
       const signup = await getSignup(kv, game.id, player.id);
       assertEquals(signup?.owedFils, 3000);
     }
-    assertEquals((await getGame(kv, game.id))?.frozenPerHeadFils, 3000);
+    assert((await getGame(kv, game.id))?.rosterFrozenAt);
   });
 });
 
 Deno.test("a player who brought a guest owes both shares", async () => {
   await withTestKv(async (kv) => {
-    // "free" guest pricing: members absorb the guest, so the divisor is the
-    // two confirmed members and the guest owes nothing.
     const { game } = await seedGame(kv, {
       courts: 1,
       playersPerCourt: 4,
-      totalCostFils: 12000,
+      pricePerPlayerFils: 3000,
       maxGuestsPerPlayer: 1,
     });
     const [host, other] = await seedPlayers(kv, 2);
@@ -100,36 +96,11 @@ Deno.test("a player who brought a guest owes both shares", async () => {
     await makeCutoffDue(kv, game.id);
     await freezeRoster(kv, game.id);
 
-    // Under "free" the guest adds nothing to the host's bill.
+    // A guest costs what a player costs, and it lands on whoever brought them.
     const hostSignup = await getSignup(kv, game.id, host!.id);
     const otherSignup = await getSignup(kv, game.id, other!.id);
     assertEquals(hostSignup?.owedFils, 6000);
-    assertEquals(otherSignup?.owedFils, 6000);
-  });
-});
-
-Deno.test("a guest on full_share pricing is billed to their host", async () => {
-  await withTestKv(async (kv) => {
-    const { game } = await seedGame(kv, {
-      courts: 1,
-      playersPerCourt: 4,
-      totalCostFils: 12000,
-      maxGuestsPerPlayer: 1,
-      guestPricing: { mode: "full_share", feeFils: 0 },
-    });
-    const [host, other] = await seedPlayers(kv, 2);
-
-    await joinGame(kv, game.id, host!, {
-      guests: [{ id: "g1", name: "Guest" }],
-    });
-    await joinGame(kv, game.id, other!);
-
-    await makeCutoffDue(kv, game.id);
-    await freezeRoster(kv, game.id);
-
-    // Divisor is 2 members + 1 guest = 3, so 4000 each. The host covers two.
-    assertEquals((await getSignup(kv, game.id, host!.id))?.owedFils, 8000);
-    assertEquals((await getSignup(kv, game.id, other!.id))?.owedFils, 4000);
+    assertEquals(otherSignup?.owedFils, 3000);
   });
 });
 
@@ -138,18 +109,17 @@ Deno.test("a bill written at the cutoff does not move afterwards", async () => {
     const { game } = await seedGame(kv, {
       courts: 1,
       playersPerCourt: 4,
-      totalCostFils: 12000,
+      pricePerPlayerFils: 3000,
       startUtc: pastCutoffStart(),
     });
     const players = await seedPlayers(kv, 4);
-    // Only two join before the cutoff: 6000 each.
     await joinGame(kv, game.id, players[0]!);
     await joinGame(kv, game.id, players[1]!);
 
     await freezeRoster(kv, game.id);
     assertEquals(
       (await getSignup(kv, game.id, players[0]!.id))?.owedFils,
-      6000,
+      3000,
     );
 
     // A third joins after the freeze. The original two must not be re-billed.
@@ -157,11 +127,11 @@ Deno.test("a bill written at the cutoff does not move afterwards", async () => {
 
     assertEquals(
       (await getSignup(kv, game.id, players[0]!.id))?.owedFils,
-      6000,
+      3000,
     );
     assertEquals(
       (await getSignup(kv, game.id, players[1]!.id))?.owedFils,
-      6000,
+      3000,
     );
     // The late joiner was never frozen, so carries no bill from this freeze.
     assertEquals(
@@ -176,7 +146,7 @@ Deno.test("held seats are not billed", async () => {
     const { game } = await seedGame(kv, {
       courts: 1,
       playersPerCourt: 2,
-      totalCostFils: 10000,
+      pricePerPlayerFils: 2500,
       startUtc: pastCutoffStart(),
     });
     const [a, b, c] = await seedPlayers(kv, 3);
@@ -204,7 +174,7 @@ Deno.test("freezing twice does not rewrite what players owe", async () => {
     const { game } = await seedGame(kv, {
       courts: 1,
       playersPerCourt: 4,
-      totalCostFils: 12000,
+      pricePerPlayerFils: 3000,
       startUtc: pastCutoffStart(),
     });
     const players = await seedPlayers(kv, 2);
@@ -216,21 +186,66 @@ Deno.test("freezing twice does not rewrite what players owe", async () => {
     assertEquals(second.frozen, false);
     assertEquals(
       (await getSignup(kv, game.id, players[0]!.id))?.owedFils,
-      6000,
+      3000,
     );
   });
 });
 
-Deno.test("a player cannot mark a bill that does not exist yet", async () => {
+Deno.test("an unpaid player counts as owing before the freeze", async () => {
   await withTestKv(async (kv) => {
-    const { game } = await seedGame(kv, { courts: 1, playersPerCourt: 4 });
+    const { game } = await seedGame(kv, {
+      courts: 1,
+      playersPerCourt: 4,
+      pricePerPlayerFils: 3000,
+    });
+    const players = await seedPlayers(kv, 2);
+    for (const player of players) await joinGame(kv, game.id, player);
+
+    // Nothing has frozen and nobody has paid, but two seats are held.
+    const settlement = await settlementFor(kv, game.id);
+    assertEquals(settlement.owedFils, 6000);
+    assertEquals(settlement.outstandingFils, 6000);
+    assertEquals(settlement.unpaidCount, 2);
+  });
+});
+
+Deno.test("a player can pay before the roster closes", async () => {
+  await withTestKv(async (kv) => {
+    const { game } = await seedGame(kv, {
+      courts: 1,
+      playersPerCourt: 4,
+      pricePerPlayerFils: 3000,
+    });
     const [player] = await seedPlayers(kv, 1);
     await joinGame(kv, game.id, player!);
 
-    // Roster is still open, so there is no settled figure to pay.
-    await assertRejects(
-      () => markPaid(kv, game.id, player!.id),
-      SignupError,
+    // Players pay up front, and the price is fixed, so there is a real figure
+    // to pay against long before the cutoff.
+    const marked = await markPaid(kv, game.id, player!.id);
+    assertEquals(marked.payment, "marked_paid");
+    assertEquals(marked.owedFils, 3000);
+  });
+});
+
+Deno.test("a bill settled by paying early survives a later price rise", async () => {
+  await withTestKv(async (kv) => {
+    const { game } = await seedGame(kv, {
+      courts: 1,
+      playersPerCourt: 4,
+      pricePerPlayerFils: 3000,
+    });
+    const [player] = await seedPlayers(kv, 1);
+    await joinGame(kv, game.id, player!);
+    await markPaid(kv, game.id, player!.id);
+
+    await updateGame(kv, game.id, { pricePerPlayerFils: 9000 });
+    await freezeRoster(kv, game.id);
+
+    // They transferred 30 against a stated price of 30. The freeze must not
+    // turn that into a shortfall.
+    assertEquals(
+      (await getSignup(kv, game.id, player!.id))?.owedFils,
+      3000,
     );
   });
 });
@@ -240,7 +255,7 @@ Deno.test("marking then confirming walks the payment states in order", async () 
     const { game, organizer } = await seedGame(kv, {
       courts: 1,
       playersPerCourt: 4,
-      totalCostFils: 12000,
+      pricePerPlayerFils: 3000,
       startUtc: pastCutoffStart(),
     });
     const [player] = await seedPlayers(kv, 1);
@@ -267,7 +282,7 @@ Deno.test("the organizer may confirm a payment the player never marked", async (
     const { game, organizer } = await seedGame(kv, {
       courts: 1,
       playersPerCourt: 4,
-      totalCostFils: 12000,
+      pricePerPlayerFils: 3000,
       startUtc: pastCutoffStart(),
     });
     const [player] = await seedPlayers(kv, 1);
@@ -284,7 +299,7 @@ Deno.test("a late claim cannot undo the organizer's confirmation", async () => {
     const { game, organizer } = await seedGame(kv, {
       courts: 1,
       playersPerCourt: 4,
-      totalCostFils: 12000,
+      pricePerPlayerFils: 3000,
       startUtc: pastCutoffStart(),
     });
     const [player] = await seedPlayers(kv, 1);
@@ -304,7 +319,7 @@ Deno.test("confirming twice is a no-op rather than an error", async () => {
     const { game, organizer } = await seedGame(kv, {
       courts: 1,
       playersPerCourt: 4,
-      totalCostFils: 12000,
+      pricePerPlayerFils: 3000,
       startUtc: pastCutoffStart(),
     });
     const [player] = await seedPlayers(kv, 1);
@@ -325,7 +340,7 @@ Deno.test("settlement counts a claim as outstanding, not collected", async () =>
     const { game, organizer } = await seedGame(kv, {
       courts: 1,
       playersPerCourt: 4,
-      totalCostFils: 12000,
+      pricePerPlayerFils: 3000,
       startUtc: pastCutoffStart(),
     });
     const players = await seedPlayers(kv, 4);
@@ -344,17 +359,5 @@ Deno.test("settlement counts a claim as outstanding, not collected", async () =>
     assertEquals(settlement.paidCount, 1);
     assertEquals(settlement.markedCount, 1);
     assertEquals(settlement.unpaidCount, 2);
-  });
-});
-
-Deno.test("settlement of an unfrozen game reports nothing owed", async () => {
-  await withTestKv(async (kv) => {
-    const { game } = await seedGame(kv, { courts: 1, playersPerCourt: 4 });
-    const players = await seedPlayers(kv, 2);
-    for (const player of players) await joinGame(kv, game.id, player);
-
-    const settlement = await settlementFor(kv, game.id);
-    assertEquals(settlement.owedFils, 0);
-    assertEquals(settlement.outstandingFils, 0);
   });
 });

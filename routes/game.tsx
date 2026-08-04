@@ -25,7 +25,6 @@ import {
   Card,
   Chip,
   Field,
-  LinkButton,
   ProgressBar,
 } from "../components/ui.tsx";
 import {
@@ -40,14 +39,19 @@ import { AttendanceChip, AttendanceToggle } from "../components/Attendance.tsx";
 import { CheckinCode } from "../components/CheckinCode.tsx";
 import { checkinVersionOf, mintCheckinToken } from "../lib/domain/checkin.ts";
 import {
+  assertNotBlocked,
   CSRF_FIELD,
   csrfCookie,
   HttpError,
   isSecureRequest,
   loadGroupAccess,
-  requireMember,
   requireUser,
 } from "../lib/auth/middleware.ts";
+import {
+  codeMatches,
+  hasUnlocked,
+  recordUnlock,
+} from "../lib/domain/game_access.ts";
 import { act, backToGame } from "./game_action.ts";
 import { getGameBySlug } from "../lib/data/games.ts";
 import {
@@ -64,8 +68,8 @@ import { getUser } from "../lib/data/users.ts";
 import { listMatchesForGame } from "../lib/data/matches.ts";
 import { sweepInBackground } from "../lib/data/sweep.ts";
 import {
+  amountOwed,
   capacityOf,
-  displaySplit,
   formatFils,
   seatsTaken,
 } from "../lib/domain/money.ts";
@@ -102,8 +106,13 @@ interface DetailProps {
   isOrganizer: boolean;
   /** The club this game belongs to, for links back into its own screens. */
   groupSlug: string;
-  /** Non-members can read a public game but not take a seat in it. */
-  isMember: boolean;
+  /**
+   * Whether this viewer may take a seat.
+   *
+   * True for every game except a password one whose code they have not
+   * entered. The page itself is readable either way.
+   */
+  unlocked: boolean;
   matches: Match[];
   /** Minted per request for a confirmed player once the cutoff has passed. */
   checkinToken?: string;
@@ -204,23 +213,38 @@ function ActionPanel(props: DetailProps) {
     );
   }
 
-  // Someone who followed a shared link here can read the whole page, so the
-  // panel tells them what stands between them and a seat rather than showing
-  // an RSVP button that would only refuse them.
-  if (!props.isMember) {
+  // Someone who followed a shared link can read the whole page, so a password
+  // game shows everything but the way in — the panel tells them what stands
+  // between them and a seat rather than an RSVP button that would refuse them.
+  if (!props.unlocked) {
     return (
-      <Alert tone="info">
-        <div class="flex flex-col gap-3">
-          <p>Only members of this club can sign up for its games.</p>
-          <LinkButton
-            href={`/g/${props.groupSlug}/games`}
-            variant="primary"
-            class="w-fit"
-          >
-            About this club
-          </LinkButton>
+      <Card class="flex flex-col gap-3">
+        <div class="flex flex-col gap-1">
+          <h2 class="text-body-lg font-bold text-on-surface">
+            This game needs a code
+          </h2>
+          <p class="text-label-sm text-on-surface-variant">
+            The organizer gives it to the players they want. Enter it once and
+            you are in for good.
+          </p>
         </div>
-      </Alert>
+        <form
+          method="post"
+          action={`/games/${game.slug}/unlock`}
+          class="flex flex-col gap-3"
+        >
+          <input type="hidden" name={CSRF_FIELD} value={csrf} />
+          <Field
+            label="Six-digit code"
+            name="joinCode"
+            required
+            inputMode="numeric"
+            maxLength={6}
+            placeholder="000000"
+          />
+          <Button type="submit" variant="primary">Unlock this game</Button>
+        </form>
+      </Card>
     );
   }
 
@@ -325,12 +349,8 @@ function ActionPanel(props: DetailProps) {
                   maxLength={60}
                   placeholder="Who are you bringing?"
                   hint={`They take a seat and are charged ${
-                    game.guestPricing.mode === "free"
-                      ? "nothing — you cover them"
-                      : game.guestPricing.mode === "flat_fee"
-                      ? formatFils(game.guestPricing.feeFils)
-                      : "a full share"
-                  }.`}
+                    formatFils(game.pricePerPlayerFils)
+                  }, added to what you owe.`}
                 />
                 <Button type="submit" variant="secondary">Add guest</Button>
               </form>
@@ -350,10 +370,6 @@ function ActionPanel(props: DetailProps) {
 
 function GameDetail(props: DetailProps) {
   const { game, user } = props;
-  const split = displaySplit(game);
-  const empty = game.frozenPerHeadFils === undefined &&
-    game.confirmedCount === 0;
-  const frozen = game.frozenPerHeadFils !== undefined;
   // There is nothing to report a result about until people have played.
   const started = new Date(game.startUtc).getTime() <= Date.now();
   // Attendance is only meaningful once the roster is settled.
@@ -390,17 +406,11 @@ function GameDetail(props: DetailProps) {
             <Stat label="Courts">
               {game.courts} × {game.playersPerCourt} players
             </Stat>
-            <Stat label="Total court cost">
-              {formatFils(game.totalCostFils)}
+            <Stat label="Price per player">
+              {formatFils(game.pricePerPlayerFils)}
             </Stat>
-            <Stat
-              label={frozen
-                ? "Your share"
-                : empty
-                ? "Your share if you join alone"
-                : "Estimated share"}
-            >
-              {formatFils(split.perHeadFils)}
+            <Stat label="You owe">
+              {formatFils(amountOwed(props.signup ?? { guests: [] }, game))}
             </Stat>
           </dl>
 
@@ -414,12 +424,11 @@ function GameDetail(props: DetailProps) {
             label={seatsLabel(game)}
           />
 
-          {!frozen && (
+          {!game.rosterFrozenAt && (
             <p class="text-label-sm text-on-surface-variant">
-              The share moves as people join and settles at the cutoff,{" "}
-              {formatRelative(
+              The roster closes {formatRelative(
                 cutoffAt(game.startUtc, game.cutoffHours).toISOString(),
-              )}.
+              )}. The price is fixed — it does not change as people join.
             </p>
           )}
         </Card>
@@ -429,6 +438,7 @@ function GameDetail(props: DetailProps) {
         {hasBill(props.signup) && (
           <PaymentPanel
             signup={props.signup}
+            game={game}
             slug={game.slug}
             csrf={props.csrf}
             csrfField={CSRF_FIELD}
@@ -436,7 +446,7 @@ function GameDetail(props: DetailProps) {
           />
         )}
 
-        {props.isOrganizer && frozen && (
+        {props.isOrganizer && (
           <a
             href={`/g/${props.groupSlug}/organizer/games/${game.slug}/settlement`}
             class="text-label font-bold text-primary hover:underline w-fit"
@@ -536,13 +546,11 @@ export function gameRoute(app: App<State>) {
       listMatchesForGame(kv, game.id),
     ]);
 
-    // A public game is visible to anyone signed in — that is how a link shared
-    // into a chat brings someone in. A game the organizer chose to keep off
-    // the listing is a different promise, and is not honoured by handing it to
-    // anyone who guesses the slug.
-    if (game.visibility !== "public" && !access.membership) {
-      throw new HttpError(404, "That game could not be found");
-    }
+    // Any signed-in reader who has the URL may see the page — that is how a
+    // link shared into a chat brings someone in, and it is the whole mechanism
+    // behind an unlisted game. What the organizer's choice actually gates is
+    // the seat, which `unlocked` decides.
+    const unlocked = await hasUnlocked(kv, game, user.id, access.isOrganizer);
 
     // The player's permanent code, shown to anyone holding a seat. It is the
     // same code everywhere, so there is nothing to withhold until the cutoff.
@@ -560,7 +568,7 @@ export function gameRoute(app: App<State>) {
         payout={access.group.payout}
         isOrganizer={access.isOrganizer}
         groupSlug={access.group.slug}
-        isMember={access.membership !== null}
+        unlocked={unlocked}
         matches={matches}
         checkinToken={checkinToken}
         error={url.searchParams.get("error") ?? undefined}
@@ -579,9 +587,13 @@ export function gameRoute(app: App<State>) {
     "/games/:slug/join",
     (ctx) =>
       act(ctx, async ({ user, kv, game, access }) => {
-        // Joining a game is where club membership starts to matter: the game
-        // page is open to anyone signed in, but a seat on the roster is not.
-        requireMember(access);
+        // The page is open to anyone signed in; the seat is what the organizer
+        // gates. A password game needs the code entered first, and this is the
+        // check that enforces it — the hidden form is not access control.
+        assertNotBlocked(access.membership);
+        if (!await hasUnlocked(kv, game, user.id, access.isOrganizer)) {
+          throw new HttpError(403, "This game needs its code before you join.");
+        }
 
         const result = await joinGame(kv, game.id, user);
         await flush(kv, result.effects);
@@ -624,12 +636,41 @@ export function gameRoute(app: App<State>) {
       }),
   );
 
+  /**
+   * Entering a password game's code.
+   *
+   * A wrong code is a plain refusal with no counter behind it. Six digits is
+   * guessable given enough tries, but what is behind it is a badminton roster
+   * rather than an account, and locking the form would hand anyone a way to
+   * shut real players out of a game by guessing at them.
+   */
+  app.post(
+    "/games/:slug/unlock",
+    (ctx) =>
+      act(ctx, async ({ user, kv, form, game }) => {
+        const submitted = form.get("joinCode")?.toString() ?? "";
+
+        if (!codeMatches(game, submitted)) {
+          return backToGame(game.slug, {
+            error: "That code does not match this game.",
+          });
+        }
+
+        await recordUnlock(kv, game.id, user.id);
+        return {
+          action: "game.unlocked",
+          notice: "That is the one. You can take a seat now.",
+        };
+      }),
+  );
+
   app.post(
     "/games/:slug/guests",
     (ctx) =>
       act(ctx, async ({ user, kv, form, game, access }) => {
-        // A guest comes in on a member's name, so there has to be one.
-        requireMember(access);
+        // A guest rides on a seat their host already holds, and `addGuest`
+        // refuses without one — so holding the seat is the only check needed.
+        assertNotBlocked(access.membership);
 
         const name = cleanText(form.get("guestName")?.toString() ?? "", 60);
         if (name.length < 2) {

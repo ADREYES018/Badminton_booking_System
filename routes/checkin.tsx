@@ -33,7 +33,6 @@ import {
   CSRF_FIELD,
   csrfCookie,
   isSecureRequest,
-  requireMember,
   requireUser,
   resolveGroupAccess,
 } from "../lib/auth/middleware.ts";
@@ -42,14 +41,20 @@ import { getSignup, listRoster } from "../lib/data/signups.ts";
 import { getUser } from "../lib/data/users.ts";
 import { redirectToGroup } from "../lib/routing/group_redirect.ts";
 import { checkinVersionOf, mintCheckinToken } from "../lib/domain/checkin.ts";
-import { formatGameTime, isPastCutoff } from "../lib/domain/time.ts";
+import { formatGameTime } from "../lib/domain/time.ts";
 import type { VNode } from "preact";
 import type { Game, Signup, User } from "../lib/types.ts";
 
-/** A game is ready to check into once its roster has closed. */
+/**
+ * A game can be checked into for as long as it is on.
+ *
+ * The cutoff used to gate this, on the reasoning that a roster which can still
+ * change is not a door list. In practice that made the scanner impossible to
+ * try on a game that had not closed yet, and an early check-in costs nothing —
+ * attendance is a record of who turned up, and nobody turns up days early.
+ */
 function isOpenForCheckin(game: Game): boolean {
-  return game.status !== "cancelled" &&
-    isPastCutoff(game.startUtc, game.cutoffHours);
+  return game.status !== "cancelled";
 }
 
 interface RosterRow {
@@ -153,7 +158,8 @@ function PlayerView(props: PlayerProps) {
       {props.games.length === 0
         ? (
           <EmptyState title="Nothing to check into yet">
-            Your code still works. Games appear here once their rosters close.
+            Your code still works. Games appear here once you have a seat in
+            one.
           </EmptyState>
         )
         : (
@@ -187,7 +193,7 @@ function NoGameView() {
     <div class="flex flex-col gap-6 max-w-3xl mx-auto">
       <h1 class="text-headline-lg font-headline text-on-surface">Check in</h1>
       <Alert tone="info">
-        No game has closed its roster yet. Check-in opens at the cutoff.
+        No games are on right now.
       </Alert>
       <LinkButton href="/games" variant="secondary" class="w-fit">
         See the games
@@ -205,9 +211,6 @@ export function checkinRoute(app: App<State>) {
       ctx.state.auth,
       ctx.params.groupSlug!,
     );
-    // Check-in shows a player their own code or an organizer the roster, so
-    // there is nothing here for someone outside the club.
-    requireMember(access);
     const group = access.group;
 
     const render = async (node: VNode) => {

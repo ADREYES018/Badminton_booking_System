@@ -139,20 +139,6 @@ export type GameStatus =
   | "cancelled"
   | "completed";
 
-/**
- * How a guest (+1) is charged. Organizer picks this per game.
- *  - full_share: guest counts in the divisor, splits equally with members
- *  - flat_fee:   guest pays a fixed fee, deducted from the pot before split
- *  - free:       guest is excluded, members absorb the cost
- */
-export type GuestPricingMode = "full_share" | "flat_fee" | "free";
-
-export interface GuestPricing {
-  mode: GuestPricingMode;
-  /** Only meaningful when mode is "flat_fee". */
-  feeFils: number;
-}
-
 /** Guests allowed per player when the organizer has not chosen otherwise. */
 export const DEFAULT_MAX_GUESTS_PER_PLAYER = 1;
 
@@ -164,7 +150,7 @@ export interface Venue {
 }
 
 export interface Game {
-  v: 1;
+  v: 2;
   id: string;
   groupId: string;
   /** Unguessable for unlisted/password games; also used in URLs. */
@@ -179,20 +165,36 @@ export interface Game {
   playersPerCourt: number;
   courtStatus: CourtStatus;
 
-  totalCostFils: number;
-  guestPricing: GuestPricing;
+  /**
+   * What one seat costs. The organizer sets it outright rather than posting a
+   * court total for the roster to divide, so the figure a player is quoted
+   * when they join is the figure they are billed — it cannot move because
+   * somebody else dropped out.
+   *
+   * A guest seat costs the same as a player's, so a signup with one guest owes
+   * twice this.
+   */
+  pricePerPlayerFils: number;
   /** 0 disables guests entirely. */
   maxGuestsPerPlayer: number;
-  /** Frozen at the cutoff; before then the UI shows a live estimate. */
-  frozenPerHeadFils?: number;
   rosterFrozenAt?: string;
 
   skillMin?: Skill;
   skillMax?: Skill;
 
   visibility: GameVisibility;
-  /** Only set when visibility is "password". */
-  joinPasswordHash?: string;
+  /**
+   * The six digits that unlock a password game, stored in clear.
+   *
+   * Unlike a sign-in code this is not a credential and is not secret from the
+   * organizer — its whole purpose is to be read off the screen and passed on,
+   * so it has to survive being read back. It gates who may see a roster and
+   * take a seat, nothing else, and it is never shown to anyone who has not
+   * already cleared it.
+   *
+   * Only set when visibility is "password".
+   */
+  joinCode?: string;
 
   cutoffHours: number;
   status: GameStatus;
@@ -204,14 +206,12 @@ export interface Game {
    * being summed into one "taken" figure, because they answer two different
    * questions:
    *
-   *   capacity  = confirmedCount + pendingCount + guestCount
-   *   cost split divisor = confirmedCount + guestCount
+   *   capacity = confirmedCount + pendingCount + guestCount
+   *   who owes = confirmedCount
    *
    * A promoted player holds a seat for up to 12 hours before accepting. That
-   * seat must block other joins, but it must not enter the cost divisor — if it
-   * did, everyone's estimate would drop the moment someone was promoted and
-   * jump back if they let the offer expire, and a player who never accepted
-   * would have been charged a share.
+   * seat must block other joins, but it is not a bill — the player never took
+   * it, and charging for an offer that lapsed would be wrong.
    */
   confirmedCount: number;
   /** Seats held by promoted players who have not yet accepted. */

@@ -29,6 +29,7 @@ export type AuditAction =
   | "game.updated"
   | "game.cancelled"
   | "game.cutoff_overridden"
+  | "game.unlocked"
   | "game.court_added"
   | "signup.payment_marked"
   | "signup.payment_confirmed"

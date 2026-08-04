@@ -15,11 +15,7 @@ import type { App } from "fresh";
 import type { State } from "../main.ts";
 import { Page } from "../components/Layout.tsx";
 import { Avatar, Card, Chip, EmptyState } from "../components/ui.tsx";
-import {
-  requireMember,
-  requireUser,
-  resolveGroupAccess,
-} from "../lib/auth/middleware.ts";
+import { requireUser, resolveGroupAccess } from "../lib/auth/middleware.ts";
 import { getStats, listStats } from "../lib/data/matches.ts";
 import { redirectToGroup } from "../lib/routing/group_redirect.ts";
 import { getUser } from "../lib/data/users.ts";
@@ -257,8 +253,6 @@ export function statsRoute(app: App<State>) {
       ctx.state.auth,
       ctx.params.groupSlug!,
     );
-    // A leaderboard names the club's players, so it is for the club's players.
-    requireMember(access);
     const group = access.group;
 
     const [own, everyone] = await Promise.all([

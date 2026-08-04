@@ -147,7 +147,8 @@ export async function resolveGroupAccess(
   state: AuthState,
   slug: string,
 ): Promise<GroupAccess> {
-  const user = requireUser(state);
+  // Throws before the lookup when nobody is signed in.
+  requireUser(state);
   const pointer = await state.kv.get<string>(keys.groupBySlug(slug));
   if (!pointer.value) throw new HttpError(404, "That club could not be found");
   return await loadGroupAccess(state, pointer.value);

@@ -87,12 +87,12 @@ Deno.test("a repeated promote message does not promote twice", async () => {
   });
 });
 
-Deno.test("a cutoff_freeze message locks the cost", async () => {
+Deno.test("a cutoff_freeze message settles what each player owes", async () => {
   await withTestKv(async (kv) => {
     const { game } = await seedGame(kv, {
       startUtc: futureStart(4),
       cutoffHours: 48,
-      totalCostFils: 8000,
+      pricePerPlayerFils: 8000,
     });
     const players = await seedPlayers(kv, 2);
     for (const player of players) await joinGame(kv, game.id, player);
@@ -100,7 +100,11 @@ Deno.test("a cutoff_freeze message locks the cost", async () => {
     await handleQueueMessage(kv, { kind: "cutoff_freeze", gameId: game.id });
 
     const after = await getGame(kv, game.id) as Game;
-    assertEquals(after.frozenPerHeadFils, 4000);
+    assert(after.rosterFrozenAt);
+    for (const player of players) {
+      const signup = await getSignup(kv, game.id, player.id);
+      assertEquals(signup?.owedFils, 8000);
+    }
   });
 });
 
@@ -109,7 +113,7 @@ Deno.test("a repeated freeze message leaves the locked figure alone", async () =
     const { game } = await seedGame(kv, {
       startUtc: futureStart(4),
       cutoffHours: 48,
-      totalCostFils: 8000,
+      pricePerPlayerFils: 8000,
     });
     const players = await seedPlayers(kv, 2);
     for (const player of players) await joinGame(kv, game.id, player);
@@ -121,7 +125,6 @@ Deno.test("a repeated freeze message leaves the locked figure alone", async () =
     await handleQueueMessage(kv, { kind: "cutoff_freeze", gameId: game.id });
 
     const after = await getGame(kv, game.id) as Game;
-    assertEquals(after.frozenPerHeadFils, first.frozenPerHeadFils);
     assertEquals(after.rosterFrozenAt, first.rosterFrozenAt);
   });
 });

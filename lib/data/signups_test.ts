@@ -19,7 +19,7 @@ import {
   seedPlayer,
   seedPlayers,
 } from "../testing/fixtures.ts";
-import { getGame } from "./games.ts";
+import { getGame, updateGame } from "./games.ts";
 import {
   addGuest,
   confirmPromotion,
@@ -549,12 +549,12 @@ Deno.test("promoting a full game is a no-op", async () => {
 
 // --- Cutoff freeze ---------------------------------------------------------
 
-Deno.test("freezing locks the per-head cost", async () => {
+Deno.test("freezing settles what each player owes", async () => {
   await withTestKv(async (kv) => {
     const { game } = await seedGame(kv, {
       startUtc: futureStart(4),
       cutoffHours: 48,
-      totalCostFils: 12000,
+      pricePerPlayerFils: 3000,
       courts: 1,
       playersPerCourt: 4,
     });
@@ -565,8 +565,30 @@ Deno.test("freezing locks the per-head cost", async () => {
     assertEquals(result.frozen, true);
 
     const after = await getGame(kv, game.id) as Game;
-    assertEquals(after.frozenPerHeadFils, 4000);
     assert(after.rosterFrozenAt);
+    for (const player of players) {
+      const signup = await getSignup(kv, game.id, player.id);
+      assertEquals(signup?.owedFils, 3000);
+    }
+  });
+});
+
+Deno.test("a price rise after the freeze does not re-bill anyone", async () => {
+  await withTestKv(async (kv) => {
+    const { game } = await seedGame(kv, {
+      startUtc: futureStart(4),
+      cutoffHours: 48,
+      pricePerPlayerFils: 3000,
+    });
+    const [player] = await seedPlayers(kv, 1);
+    await joinGame(kv, game.id, player!);
+    await freezeRoster(kv, game.id);
+
+    await updateGame(kv, game.id, { pricePerPlayerFils: 9000 });
+
+    // They agreed to 30, so 30 is what they owe.
+    const signup = await getSignup(kv, game.id, player!.id);
+    assertEquals(signup?.owedFils, 3000);
   });
 });
 
@@ -575,7 +597,7 @@ Deno.test("freezing twice does not move the locked figure", async () => {
     const { game } = await seedGame(kv, {
       startUtc: futureStart(4),
       cutoffHours: 48,
-      totalCostFils: 12000,
+      pricePerPlayerFils: 3000,
     });
     const players = await seedPlayers(kv, 3);
     for (const player of players) await joinGame(kv, game.id, player);
@@ -587,7 +609,6 @@ Deno.test("freezing twice does not move the locked figure", async () => {
     assertEquals(second.frozen, false);
 
     const after = await getGame(kv, game.id) as Game;
-    assertEquals(after.frozenPerHeadFils, first.frozenPerHeadFils);
     assertEquals(after.rosterFrozenAt, first.rosterFrozenAt);
   });
 });
@@ -615,7 +636,7 @@ Deno.test("held seats stay out of the frozen cost", async () => {
     const { game } = await seedGame(kv, {
       startUtc: futureStart(4),
       cutoffHours: 48,
-      totalCostFils: 9000,
+      pricePerPlayerFils: 3000,
       courts: 1,
       playersPerCourt: 4,
     });
@@ -632,9 +653,11 @@ Deno.test("held seats stay out of the frozen cost", async () => {
     assertEquals(frozen.confirmedCount, 3);
 
     await freezeRoster(kv, game.id);
-    const after = await getGame(kv, game.id) as Game;
-    // Divided between the three who hold seats, not the four occupying them.
-    assertEquals(after.frozenPerHeadFils, 3000);
+
+    // The promoted player never accepted, so the freeze must not bill them.
+    const held = await getSignup(kv, game.id, players[4]!.id);
+    assertEquals(held?.status, "pending_confirm");
+    assertEquals(held?.owedFils, undefined);
   });
 });
 

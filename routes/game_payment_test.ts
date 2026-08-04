@@ -82,7 +82,7 @@ async function frozenGame() {
   const { game, organizer, groupId } = await seedGame(kv, {
     courts: 1,
     playersPerCourt: 4,
-    totalCostFils: 12000,
+    pricePerPlayerFils: 3000,
     cutoffHours: 2,
     startUtc: new Date(Date.now() + HOUR_MS).toISOString(),
   });
@@ -109,9 +109,14 @@ Deno.test("a player marking their share paid records a claim, not a confirmation
   );
 });
 
-Deno.test("paying before the roster freezes comes back as a refusal", async () => {
-  // Cutoff still ahead, so nothing has a share yet.
-  const { game } = await seedGame(kv, { courts: 1, playersPerCourt: 4 });
+Deno.test("a player can pay before the roster freezes", async () => {
+  // Players pay up front, and a fixed price means there is a real figure to
+  // pay against while the roster is still open.
+  const { game } = await seedGame(kv, {
+    courts: 1,
+    playersPerCourt: 4,
+    pricePerPlayerFils: 3000,
+  });
   const player = await seedPlayer(kv);
   await joinGame(kv, game.id, player);
   const auth = await signIn(player);
@@ -120,8 +125,9 @@ Deno.test("paying before the roster freezes comes back as a refusal", async () =
   await response.body?.cancel();
 
   assertEquals(response.status, 303);
-  assertStringIncludes(messageFrom(response).error ?? "", "not closed yet");
-  assertEquals((await getSignup(kv, game.id, player.id))?.payment, "unpaid");
+  const signup = await getSignup(kv, game.id, player.id);
+  assertEquals(signup?.payment, "marked_paid");
+  assertEquals(signup?.owedFils, 3000);
 });
 
 Deno.test("a player cannot confirm their own payment", async () => {

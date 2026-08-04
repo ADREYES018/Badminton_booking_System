@@ -6,7 +6,7 @@
  * file rather than every test at once.
  */
 
-import type { Game, GroupRole, GuestPricing, User } from "../types.ts";
+import type { Game, GameVisibility, GroupRole, User } from "../types.ts";
 import { createUser } from "../data/users.ts";
 import { createGame } from "../data/games.ts";
 import { ensureDefaultGroup, ensureMembership } from "../data/groups.ts";
@@ -18,17 +18,15 @@ export function futureStart(hoursAhead = 96): string {
   return new Date(Date.now() + hoursAhead * HOUR_MS).toISOString();
 }
 
-export const FREE_GUESTS: GuestPricing = { mode: "free", feeFils: 0 };
-
 export interface TestGameOptions {
   courts?: number;
   playersPerCourt?: number;
-  totalCostFils?: number;
-  guestPricing?: GuestPricing;
+  pricePerPlayerFils?: number;
   maxGuestsPerPlayer?: number;
   cutoffHours?: number;
   startUtc?: string;
   status?: Game["status"];
+  visibility?: GameVisibility;
 }
 
 /** Seeds a group and a game with sane defaults; capacity is courts × players. */
@@ -56,12 +54,12 @@ export async function seedGame(
     endUtc: new Date(new Date(startUtc).getTime() + 2 * HOUR_MS).toISOString(),
     courts: options.courts ?? 1,
     playersPerCourt: options.playersPerCourt ?? 4,
-    totalCostFils: options.totalCostFils ?? 12000,
-    guestPricing: options.guestPricing ?? FREE_GUESTS,
+    pricePerPlayerFils: options.pricePerPlayerFils ?? 3000,
     maxGuestsPerPlayer: options.maxGuestsPerPlayer ?? 1,
     cutoffHours: options.cutoffHours ?? 48,
     createdBy: organizer.id,
     status: options.status,
+    visibility: options.visibility,
   });
 
   return { game, organizer, groupId: group.id };

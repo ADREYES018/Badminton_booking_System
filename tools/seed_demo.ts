@@ -70,7 +70,7 @@ async function seedReachablePlayers(count: number) {
 const open = await seedGame(kv, {
   courts: 2,
   playersPerCourt: 4,
-  totalCostFils: 24000,
+  pricePerPlayerFils: 3000,
   cutoffHours: 48,
   startUtc: new Date(Date.now() + 96 * HOUR_MS).toISOString(),
 });
@@ -95,7 +95,7 @@ for (const player of joiners) {
 const frozen = await seedGame(kv, {
   courts: 1,
   playersPerCourt: 4,
-  totalCostFils: 12000,
+  pricePerPlayerFils: 3000,
   cutoffHours: 2,
   startUtc: new Date(Date.now() + HOUR_MS).toISOString(),
 });

@@ -28,7 +28,7 @@ const CURRENT_VERSION: Record<Entity, number> = {
   user: 1,
   group: 1,
   member: 1,
-  game: 1,
+  game: 2,
   signup: 1,
   match: 1,
   stats: 1,
@@ -40,13 +40,49 @@ const CURRENT_VERSION: Record<Entity, number> = {
 /**
  * Migration steps, keyed by entity then by source version.
  * `MIGRATIONS.game[1]` upgrades a v1 game to v2.
- *
- * Example, for when a future version adds a field:
- *   game: {
- *     1: (r) => ({ ...r, v: 2, guestPricing: { mode: "full_share", feeFils: 0 } }),
- *   },
  */
-const MIGRATIONS: Record<Entity, Record<number, MigrationStep>> = {};
+const MIGRATIONS: Record<Entity, Record<number, MigrationStep>> = {
+  game: {
+    /**
+     * v2 replaces a court total that the roster divided with a price the
+     * organizer sets per seat.
+     *
+     * The old figure has to be converted, and the only honest conversion is
+     * whatever the game was actually charging. A frozen game already has that
+     * number recorded, so it is used as-is and nobody's bill moves. An open
+     * game has no settled figure — its per-head estimate changed with every
+     * join — so the total is divided by the roster as it stands, which is what
+     * the page was quoting the moment before the upgrade.
+     *
+     * An empty roster divides by one: the whole cost is what the first player
+     * would have owed, and quoting zero would advertise a paid game as free.
+     */
+    1: (record) => {
+      const total = typeof record.totalCostFils === "number"
+        ? record.totalCostFils
+        : 0;
+      const frozen = typeof record.frozenPerHeadFils === "number"
+        ? record.frozenPerHeadFils
+        : undefined;
+      const confirmed = typeof record.confirmedCount === "number"
+        ? record.confirmedCount
+        : 0;
+
+      const {
+        totalCostFils: _totalCostFils,
+        guestPricing: _guestPricing,
+        frozenPerHeadFils: _frozenPerHeadFils,
+        ...rest
+      } = record;
+
+      return {
+        ...rest,
+        v: 2,
+        pricePerPlayerFils: frozen ?? Math.ceil(total / Math.max(confirmed, 1)),
+      };
+    },
+  },
+};
 
 function isVersionedRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value) &&

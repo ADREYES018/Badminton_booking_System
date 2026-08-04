@@ -3,17 +3,10 @@ import {
   aedToFils,
   amountOwed,
   capacityOf,
-  currentSplit,
-  displaySplit,
+  expectedTakeFils,
   formatFils,
   seatsRemaining,
-  splitCost,
 } from "./money.ts";
-import type { GuestPricing } from "../types.ts";
-
-const fullShare: GuestPricing = { mode: "full_share", feeFils: 0 };
-const free: GuestPricing = { mode: "free", feeFils: 0 };
-const flat40: GuestPricing = { mode: "flat_fee", feeFils: 4000 };
 
 Deno.test("aedToFils avoids float drift", () => {
   assertEquals(aedToFils(35), 3500);
@@ -30,63 +23,57 @@ Deno.test("formatFils drops trailing zeroes but keeps real fils", () => {
   assertEquals(formatFils(-3500), "-AED 35");
 });
 
-Deno.test("splitCost divides evenly when it can", () => {
-  const split = splitCost(56000, 16, 0, fullShare);
-  assertEquals(split.perHeadFils, 3500);
-  assertEquals(split.totalCollectedFils, 56000);
+Deno.test("amountOwed charges one seat per player", () => {
+  assertEquals(amountOwed({ guests: [] }, { pricePerPlayerFils: 3500 }), 3500);
 });
 
-Deno.test("splitCost rounds up so the organizer is never short", () => {
-  // 350 AED across 16 players is 21.875 each.
-  const split = splitCost(35000, 16, 0, fullShare);
-  assertEquals(split.perHeadFils, 2188);
-  // Collecting slightly more than the cost is the intended trade-off.
-  assertEquals(split.totalCollectedFils >= 35000, true);
-  assertEquals(split.totalCollectedFils - 35000, 8);
+Deno.test("amountOwed charges a guest the same as a player", () => {
+  const game = { pricePerPlayerFils: 3500 };
+  assertEquals(amountOwed({ guests: [g("a")] }, game), 7000);
+  assertEquals(amountOwed({ guests: [g("a"), g("b")] }, game), 10500);
 });
 
-Deno.test("full_share counts guests in the divisor", () => {
-  const split = splitCost(60000, 10, 2, fullShare);
-  assertEquals(split.perHeadFils, 5000);
-  assertEquals(split.perGuestFils, 5000);
+Deno.test("a bill that was already settled survives a price change", () => {
+  // The organizer raised the price after this player was billed. What they
+  // agreed to is what they owe.
+  const signup = { guests: [], owedFils: 3000 };
+  assertEquals(amountOwed(signup, { pricePerPlayerFils: 5000 }), 3000);
 });
 
-Deno.test("free mode excludes guests and members absorb the cost", () => {
-  const withoutGuests = splitCost(60000, 10, 0, free);
-  const withGuests = splitCost(60000, 10, 2, free);
-  assertEquals(withGuests.perGuestFils, 0);
-  // Guests change nothing for members under this mode.
-  assertEquals(withGuests.perHeadFils, withoutGuests.perHeadFils);
-  assertEquals(withGuests.perHeadFils, 6000);
+Deno.test("a settled bill of zero is kept, not treated as absent", () => {
+  // A free game bills zero. Falling back to the price here would invent a
+  // charge for someone who was told there was none.
+  const signup = { guests: [g("a")], owedFils: 0 };
+  assertEquals(amountOwed(signup, { pricePerPlayerFils: 5000 }), 0);
 });
 
-Deno.test("flat_fee deducts guest fees from the pot before splitting", () => {
-  // 600 AED total, two guests at 40 each leaves 520 across 10 members.
-  const split = splitCost(60000, 10, 2, flat40);
-  assertEquals(split.perGuestFils, 4000);
-  assertEquals(split.perHeadFils, 5200);
-  assertEquals(split.totalCollectedFils, 60000);
+Deno.test("expectedTakeFils counts every seat that is billed", () => {
+  assertEquals(
+    expectedTakeFils({
+      pricePerPlayerFils: 3000,
+      confirmedCount: 6,
+      guestCount: 2,
+    }),
+    24000,
+  );
 });
 
-Deno.test("flat_fee never drives member share below zero", () => {
-  // Guests over-cover the whole cost.
-  const split = splitCost(5000, 4, 3, flat40);
-  assertEquals(split.perHeadFils, 0);
-  assertEquals(split.perGuestFils, 4000);
-});
+Deno.test("a held seat blocks a join but is not billed", () => {
+  const seats = {
+    courts: 1,
+    playersPerCourt: 4,
+    confirmedCount: 3,
+    pendingCount: 1,
+    guestCount: 0,
+  };
+  // The promoted player's unaccepted seat fills the court.
+  assertEquals(seatsRemaining(seats), 0);
 
-Deno.test("splitCost with no confirmed players owes nothing", () => {
-  const split = splitCost(60000, 0, 0, fullShare);
-  assertEquals(split.perHeadFils, 0);
-  assertEquals(split.totalCollectedFils, 0);
-});
-
-Deno.test("amountOwed adds each guest's share to the inviter", () => {
-  const split = splitCost(60000, 10, 2, flat40);
-  const withTwo = amountOwed({ guests: [g("a"), g("b")] }, split);
-  // 52 for the member plus 40 per guest.
-  assertEquals(withTwo, 5200 + 4000 * 2);
-  assertEquals(amountOwed({ guests: [] }, split), 5200);
+  // But an offer nobody accepted is not money owed.
+  assertEquals(
+    expectedTakeFils({ ...seats, pricePerPlayerFils: 3000 }),
+    9000,
+  );
 });
 
 Deno.test("capacity and remaining seats account for guests", () => {
@@ -110,71 +97,6 @@ Deno.test("seatsRemaining never goes negative", () => {
     guestCount: 2,
   };
   assertEquals(seatsRemaining(game), 0);
-});
-
-Deno.test("an empty game is quoted as if you joined alone, not as free", () => {
-  const game = {
-    totalCostFils: 12000,
-    confirmedCount: 0,
-    pendingCount: 0,
-    guestCount: 0,
-    guestPricing: { mode: "free" as const, feeFils: 0 },
-    frozenPerHeadFils: undefined,
-  } as Parameters<typeof displaySplit>[0];
-
-  // currentSplit correctly says nobody owes anything...
-  assertEquals(currentSplit(game).perHeadFils, 0);
-  // ...but showing "AED 0" would read as free, when the first player in
-  // actually covers the whole court.
-  assertEquals(displaySplit(game).perHeadFils, 12000);
-});
-
-Deno.test("displaySplit defers to the real split once anyone has joined", () => {
-  const game = {
-    totalCostFils: 12000,
-    confirmedCount: 4,
-    pendingCount: 0,
-    guestCount: 0,
-    guestPricing: { mode: "free" as const, feeFils: 0 },
-    frozenPerHeadFils: undefined,
-  } as Parameters<typeof displaySplit>[0];
-
-  assertEquals(displaySplit(game).perHeadFils, 3000);
-});
-
-Deno.test("displaySplit never overrides a frozen figure", () => {
-  const game = {
-    totalCostFils: 12000,
-    confirmedCount: 0,
-    pendingCount: 0,
-    guestCount: 0,
-    guestPricing: { mode: "free" as const, feeFils: 0 },
-    frozenPerHeadFils: 2500,
-  } as Parameters<typeof displaySplit>[0];
-
-  // A frozen game with an empty roster is a real, if unusual, state — the
-  // locked figure is what everyone owes and must not be recomputed.
-  assertEquals(displaySplit(game).perHeadFils, 2500);
-});
-
-Deno.test("a held seat blocks a join but is not billed", () => {
-  const seats = {
-    courts: 1,
-    playersPerCourt: 4,
-    confirmedCount: 3,
-    pendingCount: 1,
-    guestCount: 0,
-  };
-  // The promoted player's unaccepted seat fills the court.
-  assertEquals(seatsRemaining(seats), 0);
-
-  // But the three who actually hold seats split the cost between three, not
-  // four. If the offer expires, nobody's share has to be recalculated.
-  const split = splitCost(9000, seats.confirmedCount, seats.guestCount, {
-    mode: "free",
-    feeFils: 0,
-  });
-  assertEquals(split.perHeadFils, 3000);
 });
 
 function g(id: string) {

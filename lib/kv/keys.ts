@@ -82,13 +82,23 @@ export const keys = {
   gamesByGroup: (groupId: string, startUtc: string, gameId: string) =>
     ["games_by_group", groupId, startUtc, gameId] as const,
   /**
-   * Public listing for one group. Unlisted and password games are excluded.
+   * Public listing for one group. Unlisted games are excluded.
    *
    * Scoped by group so a range read answers "what is on at this club?" without
    * filtering, and so no group's games can appear in another's listing.
    */
   gamesOpen: (groupId: string, startUtc: string, gameId: string) =>
     ["games_open", groupId, startUtc, gameId] as const,
+  /**
+   * Every listed game everywhere, in time order.
+   *
+   * The per-group index cannot answer this: it puts the group id ahead of the
+   * start time, so reading across groups would mean one range read per group
+   * and a merge. This index carries the same entries keyed by time alone, and
+   * is written in the same commit so the two can never disagree.
+   */
+  gamesAll: (startUtc: string, gameId: string) =>
+    ["games_all", startUtc, gameId] as const,
   gameBySlug: (slug: string) => ["game_by_slug", slug] as const,
   /** Remembers that a user already cleared a game's join password. */
   gamePasswordOk: (gameId: string, userId: string) =>

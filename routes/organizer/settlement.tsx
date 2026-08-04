@@ -93,11 +93,10 @@ function SettlementPage(props: SettlementProps) {
           </p>
         </header>
 
-        {game.frozenPerHeadFils === undefined
+        {game.confirmedCount === 0
           ? (
             <Alert tone="info">
-              The roster has not closed yet, so nobody has a share to pay.
-              Shares are set at the cutoff.
+              Nobody has joined yet, so there is nothing to collect.
             </Alert>
           )
           : (
@@ -122,8 +121,8 @@ function SettlementPage(props: SettlementProps) {
                     value={formatFils(settlement.owedFils)}
                   />
                   <Total
-                    label="Court cost"
-                    value={formatFils(game.totalCostFils)}
+                    label="Price per player"
+                    value={formatFils(game.pricePerPlayerFils)}
                   />
                 </dl>
 
