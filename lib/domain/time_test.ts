@@ -5,6 +5,7 @@ import {
   delayUntil,
   formatGameTime,
   isPastCutoff,
+  MAX_QUEUE_DELAY_MS,
   promotionWindow,
 } from "./time.ts";
 
@@ -91,6 +92,23 @@ Deno.test("delayUntil floors at zero for past deadlines", () => {
     delayUntil(new Date(now.getTime() + 3 * HOUR).toISOString(), now),
     3 * HOUR,
   );
+});
+
+Deno.test("delayUntil never exceeds the queue's own limit", () => {
+  // Deno KV rejects a delay over 30 days outright, which crashed posting any
+  // game more than about a month out. The handler reschedules itself when it
+  // fires early, so capping costs nothing but an extra wake-up.
+  const now = new Date(START);
+  const farFuture = new Date(now.getTime() + 400 * 24 * HOUR).toISOString();
+
+  assertEquals(delayUntil(farFuture, now), MAX_QUEUE_DELAY_MS);
+});
+
+Deno.test("a deadline inside the limit is not capped", () => {
+  const now = new Date(START);
+  const inRange = new Date(now.getTime() + 29 * 24 * HOUR).toISOString();
+
+  assertEquals(delayUntil(inRange, now), 29 * 24 * HOUR);
 });
 
 Deno.test("game time renders in Dubai time in the house format", () => {

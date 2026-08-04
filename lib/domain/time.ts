@@ -87,9 +87,29 @@ export function promotionWindow(
   };
 }
 
-/** Milliseconds until a deadline, floored at zero — for kv.enqueue delays. */
+/**
+ * The longest delay Deno KV will accept on an enqueued message.
+ *
+ * Anything beyond this is rejected outright, which took down posting a game
+ * more than about a month out — the cutoff freeze was scheduled past the
+ * limit and `kv.enqueue` threw before the redirect.
+ */
+export const MAX_QUEUE_DELAY_MS = 30 * 24 * 60 * 60 * 1000;
+
+/**
+ * Milliseconds until a deadline, for `kv.enqueue` delays.
+ *
+ * Floored at zero, because a deadline in the past means "now", and capped at
+ * the queue's own limit, because a longer wait is not expressible.
+ *
+ * Capping is safe rather than lossy: every handler re-reads the live record
+ * and reschedules itself when it fires early — the same mechanism that makes
+ * an edited start time work, since queued messages cannot be cancelled. A
+ * game booked a year out simply wakes up monthly until its cutoff is real.
+ */
 export function delayUntil(iso: string, now: Date = new Date()): number {
-  return Math.max(0, new Date(iso).getTime() - now.getTime());
+  const until = new Date(iso).getTime() - now.getTime();
+  return Math.min(MAX_QUEUE_DELAY_MS, Math.max(0, until));
 }
 
 const dateFmt = new Intl.DateTimeFormat("en-GB", {

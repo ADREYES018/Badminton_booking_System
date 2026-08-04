@@ -34,6 +34,7 @@ import {
 } from "../components/GameCard.tsx";
 import RsvpButton from "../islands/RsvpButton.tsx";
 import PaymentDialog from "../islands/PaymentDialog.tsx";
+import GamePostedDialog from "../islands/GamePostedDialog.tsx";
 import { hasBill, PaymentPanel } from "../components/PaymentPanel.tsx";
 import { ResultsPanel } from "../components/ResultsPanel.tsx";
 import { AttendanceChip, AttendanceToggle } from "../components/Attendance.tsx";
@@ -87,6 +88,7 @@ import {
 } from "../lib/domain/join_rules.ts";
 import { cleanText } from "../lib/domain/validate.ts";
 import { mapsUrl } from "../lib/domain/venue.ts";
+import { appUrl } from "../lib/email.ts";
 import type { Game, Match, PayoutDetails, Signup, User } from "../lib/types.ts";
 
 interface RosterMember {
@@ -124,6 +126,11 @@ interface DetailProps {
    * the player opens the game.
    */
   promptPayment?: boolean;
+  /**
+   * Raises the "your game is posted" confirmation, set only on the redirect
+   * that follows creating one. A reload drops it.
+   */
+  justPosted?: boolean;
   error?: string;
   notice?: string;
 }
@@ -470,6 +477,14 @@ function GameDetail(props: DetailProps) {
           />
         )}
 
+        {props.justPosted && props.isOrganizer && (
+          <GamePostedDialog
+            title={game.title}
+            url={new URL(`/games/${game.slug}`, appUrl()).toString()}
+            joinCode={game.joinCode}
+          />
+        )}
+
         {props.promptPayment && props.signup && (
           <PaymentDialog
             owed={formatFils(amountOwed(props.signup, game))}
@@ -607,6 +622,7 @@ export function gameRoute(app: App<State>) {
         matches={matches}
         checkinToken={checkinToken}
         promptPayment={url.searchParams.get("pay") === "1"}
+        justPosted={url.searchParams.get("posted") === "1"}
         error={url.searchParams.get("error") ?? undefined}
         notice={url.searchParams.get("notice") ?? undefined}
         {...roster}

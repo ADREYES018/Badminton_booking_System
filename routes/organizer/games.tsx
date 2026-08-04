@@ -574,7 +574,10 @@ export function organizerGameRoutes(app: App<State>) {
       ip: clientIp(ctx.req),
     });
 
-    return ctx.redirect(`/games/${game.slug}`);
+    // `posted=1` raises the confirmation on the page they land on. It rides on
+    // the redirect rather than being inferred from anything on the record, so
+    // a reload drops it and the organizer is congratulated once.
+    return ctx.redirect(`/games/${game.slug}?posted=1`);
   });
 
   app.get("/g/:groupSlug/organizer/games/:slug/edit", async (ctx) => {
