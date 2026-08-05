@@ -110,10 +110,24 @@ checkinRoute(app);
 photoRoute(app);
 manifestRoute(app);
 
-if (import.meta.main) {
-  // The waitlist and the cutoff freeze run on delayed queue messages. The
-  // listener is started only for a real server — tests drive the handler
-  // directly, so they never depend on delivery timing.
+// The waitlist and the cutoff freeze run on delayed queue messages, so a
+// server that never registers the listener throws on the first `kv.enqueue` —
+// which is exactly the two actions that enqueue one, posting a game and
+// cancelling a spot.
+//
+// This cannot live under `import.meta.main`. Deploy runs the app through
+// `deno serve` against the built bundle, so the entry module is that bundle
+// rather than this file and the guard is false — the listener would never be
+// registered in production, which is the one place it matters most.
+//
+// Tests are the reason it is gated at all rather than being unconditional:
+// several route tests import this module, and registering at import time would
+// open the real database and make delivery timing part of the suite. Tests
+// drive the handler directly instead.
+if (import.meta.main || Deno.env.get("DENO_DEPLOYMENT_ID")) {
   startQueueListener(await getKv());
+}
+
+if (import.meta.main) {
   await app.listen();
 }
