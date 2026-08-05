@@ -159,6 +159,49 @@ Deno.test("leaving through the route frees the seat", async () => {
   assertEquals((await getGame(kv, game.id))?.confirmedCount, 0);
 });
 
+Deno.test("cancelling lands on the games list, not the game left behind", async () => {
+  const { game, groupId } = await seedGame(kv);
+  const player = await seedPlayer(kv);
+  await seedMember(kv, groupId, player);
+  const auth = await signIn(player);
+
+  await (await post(`/games/${game.slug}/join`, auth)).body?.cancel();
+  const response = await post(`/games/${game.slug}/leave`, auth);
+  await response.body?.cancel();
+
+  const location = new URL(
+    response.headers.get("location")!,
+    "http://localhost",
+  );
+  assertEquals(location.pathname, "/games");
+  // What raises the confirmation on arrival, and what it names.
+  assertEquals(location.searchParams.get("cancelled"), game.title);
+  // Cancelled inside the cutoff, so nothing is owed and the dialog says so.
+  assertEquals(location.searchParams.get("owed"), null);
+});
+
+Deno.test("cancelling after the cutoff says the share is still owed", async () => {
+  // Starts within the cutoff window, so leaving forfeits.
+  const { game, groupId } = await seedGame(kv, {
+    startUtc: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+    cutoffHours: 48,
+  });
+  const player = await seedPlayer(kv);
+  await seedMember(kv, groupId, player);
+  const auth = await signIn(player);
+
+  await (await post(`/games/${game.slug}/join`, auth)).body?.cancel();
+  const response = await post(`/games/${game.slug}/leave`, auth);
+  await response.body?.cancel();
+
+  const location = new URL(
+    response.headers.get("location")!,
+    "http://localhost",
+  );
+  assertEquals(location.pathname, "/games");
+  assertEquals(location.searchParams.get("owed"), "1");
+});
+
 Deno.test("adding a guest takes a seat and names the guest back", async () => {
   const { game, groupId } = await seedGame(kv, { maxGuestsPerPlayer: 1 });
   const player = await seedPlayer(kv);

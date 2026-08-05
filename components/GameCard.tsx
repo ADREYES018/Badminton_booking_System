@@ -63,6 +63,50 @@ function ClockIcon() {
 }
 
 /**
+ * Marks a game that is not simply open to anyone who finds it.
+ *
+ * Sized from the surrounding text rather than fixed, so it sits on a chip and
+ * beside a heading without a second copy.
+ */
+export function LockIcon(props: { size?: number }) {
+  const size = props.size ?? 16;
+  return (
+    <svg {...iconProps} width={size} height={size}>
+      <rect x="4" y="10" width="16" height="11" rx="2" />
+      <path d="M8 10V7a4 4 0 0 1 8 0v3" />
+    </svg>
+  );
+}
+
+/**
+ * Whether a game keeps people out, and how.
+ *
+ * Two different restrictions with one shared symbol: a password game anyone can
+ * see but not join without the code, and an unlisted one that is only reachable
+ * by link. Both are "not open to everyone", which is what the lock says; the
+ * label carries the difference.
+ */
+export function accessLabel(game: Game): string | null {
+  if (game.visibility === "password") return "Code needed";
+  if (game.visibility === "unlisted") return "Unlisted";
+  return null;
+}
+
+/** The lock chip, absent for a public game. */
+export function AccessChip(props: { game: Game }) {
+  const label = accessLabel(props.game);
+  if (!label) return null;
+  return (
+    <Chip tone="neutral">
+      <span class="inline-flex items-center gap-1">
+        <LockIcon size={12} />
+        {label}
+      </span>
+    </Chip>
+  );
+}
+
+/**
  * A glyph per sport, so a list of five sports is scannable without reading.
  *
  * Drawn rather than lettered because the point is telling them apart at a
@@ -232,6 +276,9 @@ export function GameCard(
             ? "Played."
             : `${seatsLabel(game)}.`,
           viewerStateLabel(viewer),
+          // The chips are aria-hidden, so the lock reaches a screen reader
+          // here or not at all.
+          accessLabel(game),
         ].filter(Boolean).join(" ")}
         class="flex flex-col gap-3 no-underline text-inherit cursor-pointer
                rounded-lg focus-visible:outline-2 focus-visible:outline-primary
@@ -266,6 +313,7 @@ export function GameCard(
           >
             <GameStatusChip game={game} />
             <ViewerStateChip state={viewer} />
+            <AccessChip game={game} />
           </div>
         </div>
 

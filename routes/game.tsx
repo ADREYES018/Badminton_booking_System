@@ -28,6 +28,7 @@ import {
   ProgressBar,
 } from "../components/ui.tsx";
 import {
+  AccessChip,
   GameStatusChip,
   seatsLabel,
   viewerStateOf,
@@ -35,6 +36,8 @@ import {
 import RsvpButton from "../islands/RsvpButton.tsx";
 import PaymentDialog from "../islands/PaymentDialog.tsx";
 import GamePostedDialog from "../islands/GamePostedDialog.tsx";
+import ShareLink from "../islands/ShareLink.tsx";
+import OrganizerContact from "../islands/OrganizerContact.tsx";
 import { hasBill, PaymentPanel } from "../components/PaymentPanel.tsx";
 import { ResultsPanel } from "../components/ResultsPanel.tsx";
 import { AttendanceChip, playersFrom } from "../components/Attendance.tsx";
@@ -66,6 +69,7 @@ import {
   joinGame,
   leaveGame,
   loadRoster,
+  promotePlayer,
   removeGuest,
 } from "../lib/data/signups.ts";
 import { getUser } from "../lib/data/users.ts";
@@ -90,9 +94,28 @@ import {
 } from "../lib/domain/join_rules.ts";
 import { cleanText } from "../lib/domain/validate.ts";
 import { mapsUrl } from "../lib/domain/venue.ts";
-import { appUrl } from "../lib/email.ts";
+import {
+  accessDecidedEmail,
+  accessRequestedEmail,
+  appUrl,
+  sendEmail,
+} from "../lib/email.ts";
+import {
+  approveAccess,
+  getAccessRequest,
+  listAccessRequests,
+  rejectAccess,
+  requestAccess,
+} from "../lib/data/access_requests.ts";
 import { SPORT_LABELS } from "../lib/types.ts";
-import type { Game, Match, PayoutDetails, Signup, User } from "../lib/types.ts";
+import type {
+  AccessRequest,
+  Game,
+  Match,
+  PayoutDetails,
+  Signup,
+  User,
+} from "../lib/types.ts";
 
 interface RosterMember {
   signup: Signup;
@@ -123,9 +146,28 @@ interface DetailProps {
    * entered. The page itself is readable either way.
    */
   unlocked: boolean;
+  /**
+   * This viewer's own standing request, when they have made one. Drives
+   * whether the locked panel offers to ask or reports on an ask already made.
+   */
+  accessRequest?: AccessRequest;
+  /**
+   * Requests still waiting on an answer, for the organizer. Each carries the
+   * asker so the list reads as people rather than as ids.
+   */
+  pendingAccess?: { request: AccessRequest; user: User | null }[];
   matches: Match[];
   /** Minted per request for a confirmed player once the cutoff has passed. */
   checkinToken?: string;
+  /**
+   * Whoever runs this game, for the contact card.
+   *
+   * Set only when the viewer holds a place on the roster and the organizer has
+   * a number to reach. A phone number is personal data and a public game's URL
+   * is not a credential, so this is withheld from passers-by rather than
+   * rendered and hidden.
+   */
+  organizerContact?: { name: string; phone: string };
   /**
    * Raises the payment dialog, set only on the redirect that follows taking a
    * seat. A reload drops it, so the prompt appears once rather than every time
@@ -157,6 +199,11 @@ function RosterList(
     note?: string;
     /** Set for an organizer, who may drop a player from the roster. */
     remove?: { slug: string; csrf: string; viewerId: string };
+    /**
+     * Set on the waitlist for an organizer, who may seat someone ahead of
+     * their turn or past the stated capacity.
+     */
+    promote?: { slug: string; csrf: string };
   },
 ) {
   if (props.members.length === 0) return null;
@@ -197,6 +244,35 @@ function RosterList(
                  their own seat uses "Cancel my spot" like anyone else, which
                  goes through the same refund and waitlist rules. */
             }
+            {
+              /* Seating someone off the waitlist. Offered on the waitlist
+                 only, and regardless of remaining seats — the organizer
+                 decides how many can actually play. */
+            }
+            {props.promote && (
+              <form
+                method="post"
+                action={`/games/${props.promote.slug}/promote`}
+                class="shrink-0"
+              >
+                <input
+                  type="hidden"
+                  name={CSRF_FIELD}
+                  value={props.promote.csrf}
+                />
+                <input type="hidden" name="userId" value={signup.userId} />
+                <Button
+                  type="submit"
+                  variant="secondary"
+                  class="px-4 py-2"
+                  aria-label={`Give ${
+                    user?.name ?? "this player"
+                  } a spot in this game`}
+                >
+                  Give a spot
+                </Button>
+              </form>
+            )}
             {props.remove && signup.userId !== props.remove.viewerId && (
               <form
                 method="post"
@@ -285,6 +361,52 @@ function ActionPanel(props: DetailProps) {
           />
           <Button type="submit" variant="primary">Unlock this game</Button>
         </form>
+
+        {
+          /* The other way in, for someone who has the link but knows nobody
+             holding the code. Without this the lock is a dead end rather than
+             a door, and the game's only route in is already knowing someone. */
+        }
+        <div class="border-t border-outline-variant/40 pt-3 flex flex-col gap-3">
+          {props.accessRequest?.status === "pending"
+            ? (
+              <p class="text-label-sm text-on-surface-variant">
+                You have asked the organizer to let you in. They will get back
+                to you.
+              </p>
+            )
+            : props.accessRequest?.status === "rejected"
+            ? (
+              <p class="text-label-sm text-on-surface-variant">
+                The organizer turned down your last request. You can ask again
+                if something has changed.
+              </p>
+            )
+            : (
+              <p class="text-label-sm text-on-surface-variant">
+                No code? Ask the organizer and they can let you straight in.
+              </p>
+            )}
+
+          {props.accessRequest?.status !== "pending" && (
+            <form
+              method="post"
+              action={`/games/${game.slug}/access/request`}
+              class="flex flex-col gap-3"
+            >
+              <input type="hidden" name={CSRF_FIELD} value={csrf} />
+              <Field
+                label="Anything to tell them? (optional)"
+                name="message"
+                maxLength={280}
+                placeholder="I play with Sam on Tuesdays"
+              />
+              <Button type="submit" variant="secondary">
+                Ask to join
+              </Button>
+            </form>
+          )}
+        </div>
       </Card>
     );
   }
@@ -439,12 +561,52 @@ function GameDetail(props: DetailProps) {
             <h1 class="text-headline-lg font-headline text-on-surface">
               {game.title}
             </h1>
-            <GameStatusChip game={game} />
+            <div class="flex flex-col items-end gap-1.5 shrink-0">
+              <GameStatusChip game={game} />
+              <AccessChip game={game} />
+            </div>
           </div>
           <p class="text-body-lg text-on-surface-variant">
             {formatGameTime(game.startUtc, game.endUtc)}
           </p>
         </header>
+
+        {
+          /*
+          The organizer's toolbar for this game.
+
+          These used to sit far down the page, below the payment panels, so an
+          organizer who opened their own game had to scroll past everything a
+          player sees to reach the two screens only they can use. Sitting under
+          the header puts them where the page says whose game this is.
+
+          Editing points at the club-free path, which checks the same rights
+          and works for a game with no club at all. Settlement lives under a
+          club, so a clubless game has no screen to link to — its organizer
+          settles up from the roster below.
+        */
+        }
+        {props.isOrganizer && (
+          <nav
+            aria-label="Organizer tools"
+            class="flex flex-wrap items-center gap-2 -mt-2"
+          >
+            <a
+              href={`/games/${game.slug}/edit`}
+              class="inline-flex items-center gap-1.5 rounded-full border border-outline-variant bg-surface-container px-4 py-2 text-label font-bold text-on-surface hover:border-primary hover:text-primary transition-colors"
+            >
+              Edit game settings
+            </a>
+            {props.groupSlug && (
+              <a
+                href={`/g/${props.groupSlug}/organizer/games/${game.slug}/settlement`}
+                class="inline-flex items-center gap-1.5 rounded-full border border-outline-variant bg-surface-container px-4 py-2 text-label font-bold text-on-surface hover:border-primary hover:text-primary transition-colors"
+              >
+                View settlement
+              </a>
+            )}
+          </nav>
+        )}
 
         <Card class="flex flex-col gap-5">
           <dl class="grid grid-cols-2 gap-4">
@@ -503,6 +665,25 @@ function GameDetail(props: DetailProps) {
           code that is the only route into their own game.
         */
         }
+        {
+          /* Shown for every game, public included: a game nobody has been told
+             about is a game nobody joins, and "anyone can find it" is not the
+             same as anyone having found it. */
+        }
+        {game.status !== "cancelled" && (
+          <ShareLink
+            url={new URL(`/games/${game.slug}`, appUrl()).toString()}
+            title={game.title}
+          />
+        )}
+
+        {props.organizerContact && (
+          <OrganizerContact
+            name={props.organizerContact.name}
+            phone={props.organizerContact.phone}
+          />
+        )}
+
         {props.isOrganizer && game.visibility === "password" &&
           game.joinCode && (
           <Card class="flex flex-col gap-1">
@@ -551,39 +732,102 @@ function GameDetail(props: DetailProps) {
           />
         )}
 
-        {
-          /*
-          The organizer's way into the game's own settings.
-
-          Editing was previously reachable only from a club's games list, so an
-          organizer looking at the game they wanted to change had to navigate
-          away to change it. The link points at the club-free path, which
-          checks the same rights and works for a game with no club at all.
-
-          Settlement lives under a club, so a clubless game has no screen to
-          link to — its organizer settles up from the roster below.
-        */
-        }
-        {props.isOrganizer && (
-          <div class="flex flex-wrap items-center gap-4">
-            <a
-              href={`/games/${game.slug}/edit`}
-              class="text-label font-bold text-primary hover:underline w-fit"
-            >
-              Edit game settings →
-            </a>
-            {props.groupSlug && (
-              <a
-                href={`/g/${props.groupSlug}/organizer/games/${game.slug}/settlement`}
-                class="text-label font-bold text-primary hover:underline w-fit"
-              >
-                View settlement →
-              </a>
-            )}
-          </div>
-        )}
-
         <ActionPanel {...props} />
+
+        {
+          /* Waiting requests, for whoever runs the game. Above the roster
+             because it is the one thing here that is waiting on them — the
+             roster is a record, this is a queue. */
+        }
+        {props.isOrganizer && props.pendingAccess &&
+          props.pendingAccess.length > 0 && (
+          <Card class="flex flex-col gap-4">
+            <div class="flex flex-col gap-1">
+              <h2 class="text-body-lg font-bold text-on-surface">
+                Asking to join
+              </h2>
+              <p class="text-label-sm text-on-surface-variant">
+                Letting someone in means they can take a seat without the code.
+                It does not put them on the roster — they still join themselves.
+              </p>
+            </div>
+            <ul class="flex flex-col gap-3">
+              {props.pendingAccess.map(({ request, user }) => (
+                <li
+                  key={request.userId}
+                  class="flex flex-wrap items-center gap-3"
+                >
+                  <Avatar
+                    name={user?.name ?? "Player"}
+                    userId={request.userId}
+                    hasPhoto={user?.hasPhoto}
+                    size={36}
+                  />
+                  <div class="flex flex-col min-w-0 flex-1">
+                    <span class="text-body-md text-on-surface truncate">
+                      {user?.name ?? "Player"}
+                    </span>
+                    {request.message && (
+                      <span class="text-label-sm text-on-surface-variant">
+                        “{request.message}”
+                      </span>
+                    )}
+                  </div>
+                  <div class="flex gap-1 shrink-0">
+                    <form
+                      method="post"
+                      action={`/games/${game.slug}/access/decide`}
+                    >
+                      <input
+                        type="hidden"
+                        name={CSRF_FIELD}
+                        value={props.csrf}
+                      />
+                      <input
+                        type="hidden"
+                        name="userId"
+                        value={request.userId}
+                      />
+                      <input type="hidden" name="decision" value="approve" />
+                      <Button
+                        type="submit"
+                        variant="secondary"
+                        class="px-4 py-2"
+                        aria-label={`Let ${user?.name ?? "this player"} in`}
+                      >
+                        Let them in
+                      </Button>
+                    </form>
+                    <form
+                      method="post"
+                      action={`/games/${game.slug}/access/decide`}
+                    >
+                      <input
+                        type="hidden"
+                        name={CSRF_FIELD}
+                        value={props.csrf}
+                      />
+                      <input
+                        type="hidden"
+                        name="userId"
+                        value={request.userId}
+                      />
+                      <input type="hidden" name="decision" value="reject" />
+                      <Button
+                        type="submit"
+                        variant="ghost"
+                        class="px-4 py-2"
+                        aria-label={`Turn down ${user?.name ?? "this player"}`}
+                      >
+                        No
+                      </Button>
+                    </form>
+                  </div>
+                </li>
+              ))}
+            </ul>
+          </Card>
+        )}
 
         <Card class="flex flex-col gap-6">
           <RosterList
@@ -600,8 +844,13 @@ function GameDetail(props: DetailProps) {
           <RosterList
             title="Waitlist"
             members={props.waitlisted}
-            note="In the order they joined."
+            note={props.isOrganizer
+              ? "In the order they joined. Giving someone a spot works even when the game is full."
+              : "In the order they joined."}
             remove={remove}
+            promote={props.isOrganizer && game.status !== "cancelled"
+              ? { slug: game.slug, csrf: props.csrf }
+              : undefined}
           />
           {props.confirmed.length === 0 && props.waitlisted.length === 0 && (
             <p class="text-body-md text-on-surface-variant text-center py-4">
@@ -680,6 +929,34 @@ async function loadDetail(
   return { confirmed, pending, waitlisted };
 }
 
+/**
+ * Tells whoever runs the game that someone is asking to be let in.
+ *
+ * Deliberately not awaited into the player's response and deliberately never
+ * throwing: the request is already recorded by the time this runs, and a mail
+ * provider having a bad minute must not turn a successful ask into an error
+ * the player sees and retries into a duplicate.
+ *
+ * Goes to the game's creator rather than a club's owner — for this decision
+ * the person who set the code is the one who knows who should have it.
+ */
+function notifyOrganizerOfRequest(
+  kv: Deno.Kv,
+  game: Game,
+  player: User,
+  message?: string,
+): void {
+  (async () => {
+    const organizer = await getUser(kv, game.createdBy);
+    if (!organizer?.email) return;
+    await sendEmail(
+      accessRequestedEmail(organizer.email, game, player.name, message),
+    );
+  })().catch((error) => {
+    console.error(`Access request notice failed for game ${game.id}`, error);
+  });
+}
+
 export function gameRoute(app: App<State>) {
   app.get("/games/:slug", async (ctx) => {
     const user = requireUser(ctx.state.auth);
@@ -714,18 +991,64 @@ export function gameRoute(app: App<State>) {
       ? await mintCheckinToken(user.id, checkinVersionOf(user))
       : undefined;
 
+    // The organizer's number, for players who hold a place on this roster.
+    // Anyone signed in may read the page, so gating on a signup rather than on
+    // the page being reachable is what keeps a phone number from being handed
+    // to whoever opens a shared link. The organizer is excluded because it
+    // would be their own number.
+    const onRoster = signup?.status === "confirmed" ||
+      signup?.status === "pending_confirm" || signup?.status === "waitlisted";
+
+    // Loaded whenever there is no club to be paid through, since then the
+    // organizer's own details are the only answer to "where do I send it?".
+    const organizer = onRoster || !access.group
+      ? await getUser(kv, game.createdBy)
+      : null;
+
+    // Contact stays gated on holding a place — a phone number is personal data
+    // and a shared link is not a credential. The organizer is excluded because
+    // it would be their own number.
+    const organizerContact = onRoster && game.createdBy !== user.id &&
+        organizer?.phone
+      ? { name: organizer.name, phone: organizer.phone }
+      : undefined;
+
+    // A club's account first: a game posted under a club is the club's to
+    // collect for. Only a clubless game falls back to whoever posted it.
+    const payout = access.group?.payout ?? organizer?.payout;
+
+    // Only a locked game can have requests, so a public one skips both reads.
+    const locked = game.visibility !== "public";
+    const accessRequest = locked && !access.isOrganizer
+      ? await getAccessRequest(kv, game.id, user.id) ?? undefined
+      : undefined;
+
+    const pendingAccess = locked && access.isOrganizer
+      ? await Promise.all(
+        (await listAccessRequests(kv, game.id))
+          .filter((request) => request.status === "pending")
+          .map(async (request) => ({
+            request,
+            user: await getUser(kv, request.userId),
+          })),
+      )
+      : undefined;
+
     const response = await ctx.render(
       <GameDetail
         user={user}
         game={game}
         signup={signup}
         csrf={ctx.state.auth.csrfToken}
-        payout={access.group?.payout}
+        payout={payout}
         isOrganizer={access.isOrganizer}
         groupSlug={access.group?.slug}
         unlocked={unlocked}
         matches={matches}
         checkinToken={checkinToken}
+        organizerContact={organizerContact}
+        accessRequest={accessRequest}
+        pendingAccess={pendingAccess}
         promptPayment={url.searchParams.get("pay") === "1"}
         justPosted={url.searchParams.get("posted") === "1"}
         error={url.searchParams.get("error") ?? undefined}
@@ -783,11 +1106,28 @@ export function gameRoute(app: App<State>) {
         const result = await leaveGame(kv, game.id, user.id);
         await flush(kv, result.effects);
 
+        const owed = result.signup.payment === "forfeited";
+        const notice = owed
+          ? "You are off the roster. The cutoff has passed, so your share is still owed."
+          : "You are off the roster.";
+
+        // Back to the list rather than the game just left: there is nothing on
+        // that page for someone no longer on its roster. `cancelled` raises the
+        // confirmation on arrival, so landing somewhere else reads as the
+        // cancellation having worked rather than as having been bounced.
         return {
           action: "signup.left",
-          notice: result.signup.payment === "forfeited"
-            ? "You are off the roster. The cutoff has passed, so your share is still owed."
-            : "You are off the roster.",
+          notice,
+          redirect: new Response(null, {
+            status: 303,
+            headers: {
+              location: `/games?${new URLSearchParams({
+                notice,
+                cancelled: game.title,
+                ...(owed ? { owed: "1" } : {}),
+              })}`,
+            },
+          }),
         };
       }),
   );
@@ -830,6 +1170,101 @@ export function gameRoute(app: App<State>) {
         return {
           action: "signup.left",
           notice: `${removed?.name ?? "That player"} is off the roster.`,
+        };
+      }),
+  );
+
+  /**
+   * Asking the organizer to be let into a locked game.
+   *
+   * Open to anyone signed in who can reach the page, which is the same set who
+   * can already read it. The lock is on the seat, not on the asking.
+   */
+  app.post(
+    "/games/:slug/access/request",
+    (ctx) =>
+      act(ctx, async ({ user, kv, form, game, access }) => {
+        assertNotBlocked(access.membership);
+
+        const message = cleanText(form.get("message")?.toString() ?? "", 280);
+        const request = await requestAccess(kv, game, user.id, message);
+
+        // Mail is best-effort: the request is already recorded, and a provider
+        // having a bad minute must not turn a successful ask into an error the
+        // player sees and retries.
+        notifyOrganizerOfRequest(kv, game, user, request.message);
+
+        return {
+          action: "game.access_requested",
+          notice: "Asked. The organizer will let you know.",
+        };
+      }),
+  );
+
+  /** The organizer's answer. Approving records the unlock; it takes no seat. */
+  app.post(
+    "/games/:slug/access/decide",
+    (ctx) =>
+      act(ctx, async ({ user, kv, form, game }) => {
+        await requireGameOrganizer(ctx.state.auth, game);
+
+        const userId = form.get("userId")?.toString() ?? "";
+        if (!userId) throw new HttpError(400, "No player was named.");
+        const approve = form.get("decision") === "approve";
+
+        const player = await getUser(kv, userId);
+        if (approve) {
+          await approveAccess(kv, game.id, userId, user.id);
+        } else {
+          await rejectAccess(kv, game.id, userId, user.id);
+        }
+
+        if (player?.email) {
+          sendEmail(accessDecidedEmail(player.email, game, approve)).catch(
+            (error) =>
+              console.error(`Access decision notice failed: ${game.id}`, error),
+          );
+        }
+
+        return {
+          action: approve ? "game.access_approved" : "game.access_rejected",
+          // Named where we know the name, so the notice reads as a sentence
+          // either way rather than agreeing with a pronoun that is not there.
+          notice: approve
+            ? `${player?.name ?? "They"} can take a seat now.`
+            : player
+            ? `${player.name} was turned down.`
+            : "They were turned down.",
+        };
+      }),
+  );
+
+  /**
+   * The organizer seating someone off the waitlist ahead of their turn, or
+   * when the roster is already full.
+   *
+   * Deliberately not capacity-checked — see `promotePlayer`. The organizer is
+   * the authority on how many can actually play; the seat count is their own
+   * earlier estimate rather than a rule to enforce against them.
+   */
+  app.post(
+    "/games/:slug/promote",
+    (ctx) =>
+      act(ctx, async ({ kv, form, game }) => {
+        await requireGameOrganizer(ctx.state.auth, game);
+
+        const userId = form.get("userId")?.toString() ?? "";
+        if (!userId) throw new HttpError(400, "No player was named.");
+
+        const promoted = await getUser(kv, userId);
+        await promotePlayer(kv, game.id, userId);
+
+        // Distinct from `signup.promotion_confirmed`, which is the player
+        // accepting an offered seat. This is the organizer overriding both the
+        // queue order and the capacity.
+        return {
+          action: "signup.force_promoted",
+          notice: `${promoted?.name ?? "That player"} is on the roster.`,
         };
       }),
   );

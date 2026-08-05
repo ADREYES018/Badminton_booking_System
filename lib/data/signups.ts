@@ -638,6 +638,91 @@ export async function promoteNext(
 }
 
 /**
+ * The organizer seating a named waitlisted player, whether or not there is
+ * room.
+ *
+ * Distinct from `promoteNext` on three points, each deliberate:
+ *
+ * Capacity is not checked. An organizer who adds a court, or who knows the
+ * roster better than the number does, is the authority on how many can play —
+ * the seat count is their estimate, not a rule the app enforces against them.
+ * The roster is allowed to exceed `maxPlayers` as a result, and `seatsRemaining`
+ * already floors at zero, so an over-full game reads as full everywhere rather
+ * than reporting negative seats.
+ *
+ * A specific player is named rather than the head of the queue, because the
+ * point is overriding the order — waiting for the queue is what `promoteNext`
+ * already does.
+ *
+ * The seat is granted outright rather than offered. A player being asked to
+ * confirm within a deadline is the mechanism for a seat that freed up on its
+ * own; here the organizer has decided, and making them wait on an acceptance
+ * they did not ask for would strand the decision.
+ *
+ * Guests come along. They were recorded as an intention at join time and the
+ * whole party is what the organizer is seating.
+ */
+export async function promotePlayer(
+  kv: Deno.Kv,
+  gameId: string,
+  userId: string,
+): Promise<Signup> {
+  const result = await withRetry(kv, async (kv) => {
+    const gameEntry = await getRecord<Game>(kv, keys.game(gameId));
+    const game = gameEntry.value;
+    if (!game) throw new SignupError("That game no longer exists.");
+    if (game.status === "cancelled") {
+      throw new SignupError("That game has been cancelled.");
+    }
+
+    const signupEntry = await getRecord<Signup>(
+      kv,
+      keys.signup(gameId, userId),
+    );
+    const signup = signupEntry.value;
+    if (!signup || signup.status !== "waitlisted") {
+      throw new SignupError("That player is not on the waitlist.");
+    }
+
+    const now = nowIso();
+    const promoted: Signup = {
+      ...signup,
+      status: "confirmed",
+      waitlistSeq: undefined,
+      promotedAt: now,
+      confirmDeadline: undefined,
+      updatedAt: now,
+    };
+
+    const next: Game = {
+      ...game,
+      waitlistCount: Math.max(0, game.waitlistCount - 1),
+      confirmedCount: game.confirmedCount + 1,
+      guestCount: game.guestCount + signup.guests.length,
+      updatedAt: now,
+    };
+
+    if (seatsRemaining(next) === 0 && next.status === "open") {
+      next.status = "full";
+    }
+
+    return {
+      op: kv.atomic()
+        .check(gameEntry)
+        .check(signupEntry)
+        .set(keys.game(gameId), next)
+        .set(keys.signup(gameId, userId), promoted)
+        .delete(indexKey(signup))
+        .set(indexKey(promoted), userId),
+      result: promoted,
+    };
+  });
+
+  if (!result) throw new SignupError("That player could not be seated.");
+  return result;
+}
+
+/**
  * A promoted player accepts their seat.
  *
  * The seat was already held at promotion time, so this moves it from pending

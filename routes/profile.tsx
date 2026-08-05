@@ -234,6 +234,55 @@ function ProfileView(props: ProfileViewProps) {
               )}
             </fieldset>
 
+            {
+              /* Deliberately a second set of fields rather than a checkbox over
+                 the refund IBAN above. That one is encrypted because it is
+                 private; these are shown to every player who owes money, with a
+                 copy button. One field serving both would publish an account
+                 given to us in confidence. */
+            }
+            <fieldset class="border border-outline-variant rounded-lg p-4 flex flex-col gap-4">
+              <legend class="text-label font-bold text-on-surface-variant px-2">
+                Getting paid, when you organize (optional)
+              </legend>
+
+              <p class="text-label-sm text-on-surface-variant">
+                Where players send their share for games you run. Shown to
+                anyone who owes you money, so keep it to an account you are
+                happy to hand out. This is not your refund IBAN above — that
+                stays private.
+              </p>
+
+              <Field
+                label="Bank"
+                name="payoutBank"
+                value={user.payout?.bank ?? ""}
+                placeholder="Emirates NBD"
+              />
+
+              <Field
+                label="Account holder name"
+                name="payoutName"
+                value={user.payout?.accountName ?? ""}
+                placeholder="As printed on your bank account"
+              />
+
+              <Field
+                label="IBAN"
+                name="payoutIban"
+                value={user.payout?.iban ?? ""}
+                placeholder="AE07 0331 2345 6789 0123 456"
+                hint="All three are needed, or none."
+              />
+
+              {user.payout && (
+                <label class="flex items-center gap-2 text-label-sm text-error">
+                  <input type="checkbox" name="removePayout" value="1" />
+                  Stop showing these to players
+                </label>
+              )}
+            </fieldset>
+
             <label class="flex items-center gap-2 text-body-md text-on-surface">
               <input
                 type="checkbox"
@@ -422,6 +471,40 @@ export function profileRoutes(app: App<State>) {
       }
     }
 
+    // --- Payout details, for games this user organizes --------------------
+    //
+    // Stored in the clear, unlike the refund IBAN above: these are handed to
+    // every player who owes money, so encrypting them would protect nothing
+    // while making them unreadable where they are needed.
+    let payoutUpdate: Parameters<typeof updateUser>[2]["payout"];
+
+    if (form.get("removePayout")) {
+      payoutUpdate = null;
+    } else {
+      const bank = form.get("payoutBank")?.toString().trim() ?? "";
+      const accountName = form.get("payoutName")?.toString().trim() ?? "";
+      const payoutIban = form.get("payoutIban")?.toString().trim() ?? "";
+      const filled = [bank, accountName, payoutIban].filter(Boolean);
+
+      // All three or none: a partial set is worse than nothing, since a player
+      // would see an account number with no name to check it against.
+      if (filled.length > 0 && filled.length < 3) {
+        return fail(
+          "Fill in all three payout fields, or leave them all blank.",
+        );
+      }
+      if (filled.length === 3) {
+        if (!isValidIban(payoutIban)) {
+          return fail("That payout IBAN is not valid. Check for a typo.");
+        }
+        payoutUpdate = {
+          bank,
+          accountName,
+          iban: normalizeIban(payoutIban),
+        };
+      }
+    }
+
     try {
       await updateUser(kv, user.id, {
         name,
@@ -431,6 +514,7 @@ export function profileRoutes(app: App<State>) {
         hasPhoto,
         emailOptIn: form.get("emailOptIn") !== null,
         iban: ibanUpdate,
+        payout: payoutUpdate,
       });
     } catch (error) {
       if (error instanceof DuplicateError) {

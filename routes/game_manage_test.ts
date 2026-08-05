@@ -98,6 +98,96 @@ function gameFields(overrides: Record<string, string> = {}) {
   };
 }
 
+Deno.test("a player cannot approve their own access request", async () => {
+  const { game } = await seedGame(kv, { visibility: "password" });
+  const player = await seedReachable();
+  const auth = await signIn(player);
+
+  await (await post(`/games/${game.slug}/access/request`, auth)).body?.cancel();
+
+  // The whole point of the lock: asking is open to anyone, answering is not.
+  const response = await post(`/games/${game.slug}/access/decide`, auth, {
+    userId: player.id,
+    decision: "approve",
+  });
+  await response.body?.cancel();
+
+  const { hasUnlocked } = await import("../lib/domain/game_access.ts");
+  assertEquals(await hasUnlocked(kv, game, player.id), false);
+});
+
+Deno.test("the organizer approving lets the player take a seat", async () => {
+  const { game, organizer } = await seedGame(kv, { visibility: "password" });
+  const player = await seedReachable();
+  const playerAuth = await signIn(player);
+  const organizerAuth = await signIn(organizer);
+
+  await (await post(`/games/${game.slug}/access/request`, playerAuth)).body
+    ?.cancel();
+  await (await post(`/games/${game.slug}/access/decide`, organizerAuth, {
+    userId: player.id,
+    decision: "approve",
+  })).body?.cancel();
+
+  // Joining now works without ever entering the code.
+  const join = await post(`/games/${game.slug}/join`, playerAuth);
+  await join.body?.cancel();
+
+  assertEquals((await getSignup(kv, game.id, player.id))?.status, "confirmed");
+});
+
+Deno.test("the preset carries a game's settings without its date", async () => {
+  const organizer = await seedReachable();
+  const auth = await signIn(organizer);
+
+  // A password game, because visibility is the setting most costly to lose:
+  // silently reverting it to public would expose the next game's roster.
+  await (await post(
+    "/games",
+    auth,
+    gameFields({
+      title: "Tuesday Regulars",
+      venueName: "Al Quoz Hall",
+      pricePerPlayer: "45",
+      visibility: "password",
+      skillMin: "intermediate",
+    }),
+  )).body?.cancel();
+
+  const response = await get("/games/new?preset=1", auth);
+  const html = await response.text();
+
+  assertEquals(response.status, 200);
+  assertStringIncludes(html, 'value="Tuesday Regulars"');
+  assertStringIncludes(html, 'value="Al Quoz Hall"');
+  assertStringIncludes(html, 'value="45"');
+  // The two selects that used to read past `values` and revert to their
+  // defaults.
+  assertStringIncludes(html, '<option value="password" selected');
+  assertStringIncludes(html, 'value="intermediate" selected');
+
+  // The start time is the one field that must not carry over — last week's
+  // date in front of someone posting next week's game. Preact renders an empty
+  // attribute as a bare `value`, so that is what an unfilled field looks like.
+  assertStringIncludes(html, 'value id="start"');
+});
+
+Deno.test("the preset is offered but not applied until asked for", async () => {
+  const organizer = await seedReachable();
+  const auth = await signIn(organizer);
+
+  await (await post("/games", auth, gameFields({ title: "Sunday Social" })))
+    .body?.cancel();
+
+  const html = await (await get("/games/new", auth)).text();
+
+  // Offered by name, so the organizer knows what they would be copying.
+  assertStringIncludes(html, "Sunday Social");
+  assertStringIncludes(html, "?preset=1");
+  // But the form itself is still empty.
+  assertStringIncludes(html, 'value placeholder="Sunday Doubles"');
+});
+
 Deno.test("a player in no club can post a game, and it belongs to them", async () => {
   const player = await seedReachable();
   const auth = await signIn(player);

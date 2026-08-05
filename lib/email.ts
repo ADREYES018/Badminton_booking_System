@@ -431,8 +431,88 @@ export function paymentClaimedEmail(
   };
 }
 
-/** WhatsApp deep link, used instead of the paid Business API. */
-export function whatsappLink(phoneE164: string, message: string): string {
-  const number = phoneE164.replace(/\D/g, "");
-  return `https://wa.me/${number}?text=${encodeURIComponent(message)}`;
+/**
+ * Tells the organizer someone is asking to be let into a locked game.
+ *
+ * The player's own words are carried through when they wrote any: "I play with
+ * Sam on Tuesdays" is the whole basis on which an organizer decides, and
+ * dropping it would leave them approving a name they do not recognise.
+ */
+export function accessRequestedEmail(
+  to: string,
+  game: import("./types.ts").Game,
+  playerName: string,
+  message?: string,
+): EmailMessage {
+  const url = new URL(`/games/${game.slug}`, appUrl()).toString();
+  const subject = `${playerName} wants to join ${game.title}`;
+  const lead = `${playerName} is asking to be let into ${game.title}. ` +
+    `Approving lets them take a seat without the code.`;
+
+  return {
+    to,
+    subject,
+    html: layout(
+      "Someone wants in",
+      `<p style="font-size:16px;line-height:1.6;margin:0 0 8px;">${
+        escapeHtml(lead)
+      }</p>
+       ${
+        message
+          ? `<p style="font-size:15px;line-height:1.6;margin:0 0 8px;padding:12px;background:#f2f4ec;border-radius:8px;">${
+            escapeHtml(message)
+          }</p>`
+          : ""
+      }
+       ${button(url, "Review the request")}`,
+    ),
+    text: [
+      subject,
+      "",
+      lead,
+      ...(message ? ["", `They said: ${message}`] : []),
+      "",
+      url,
+    ].join("\n"),
+  };
 }
+
+/**
+ * Tells the player what the organizer decided.
+ *
+ * An approval leads with what to do next, because being let in is not the same
+ * as being on the roster and a player who stops reading here would miss that
+ * they still have to join. A refusal says so plainly and offers nothing —
+ * dressing it up would only invite another ask.
+ */
+export function accessDecidedEmail(
+  to: string,
+  game: import("./types.ts").Game,
+  approved: boolean,
+): EmailMessage {
+  const url = new URL(`/games/${game.slug}`, appUrl()).toString();
+  const subject = approved
+    ? `You are in for ${game.title}`
+    : `Your request for ${game.title} was declined`;
+  const lead = approved
+    ? `The organizer let you into ${game.title}. You still need to take a ` +
+      `seat — open the game and join.`
+    : `The organizer declined your request to join ${game.title}.`;
+
+  return {
+    to,
+    subject,
+    html: layout(
+      approved ? "You are in" : "Not this time",
+      `<p style="font-size:16px;line-height:1.6;margin:0 0 8px;">${
+        escapeHtml(lead)
+      }</p>
+       ${approved ? button(url, "Take your seat") : ""}`,
+    ),
+    text: [subject, "", lead, ...(approved ? ["", url] : [])].join("\n"),
+  };
+}
+
+// The WhatsApp deep-link helper moved to `domain/contact.ts`: an island renders
+// those links, and pulling this module into the client bundle for one string
+// would bring MIME building with it.

@@ -10,6 +10,7 @@ import { loadAuthState } from "./lib/auth/middleware.ts";
 import type { AuthState } from "./lib/auth/middleware.ts";
 import { handleRouteError } from "./lib/auth/error_middleware.ts";
 import { getKv } from "./lib/kv/kv.ts";
+import { assertSecretsPresent } from "./lib/crypto.ts";
 import { startQueueListener } from "./lib/queue/dispatch.ts";
 
 import AppWrapper from "./routes/_app.tsx";
@@ -36,6 +37,28 @@ export interface State {
 }
 
 export const app = new App<State>();
+
+/**
+ * Warns at boot when a secret is missing.
+ *
+ * The keys are built lazily, so without this a server started with no
+ * `APP_SECRET` boots cleanly, serves most of the app, and then throws a 500 on
+ * the first page that mints a check-in token. The action that led there has
+ * already succeeded by then, so the failure reads as a bug in whichever button
+ * was pressed rather than as missing configuration.
+ *
+ * A warning rather than a throw: tests import this module and set their
+ * secrets afterwards, and `deno task check` type-checks it with no environment
+ * at all. The 500 is still a 500 — what this buys is a line at startup saying
+ * why.
+ */
+assertSecretsPresent().catch((error: unknown) => {
+  console.error(
+    `Startup check failed — requests needing this will return 500.\n  ${
+      error instanceof Error ? error.message : String(error)
+    }\n  Run through 'deno task start', which loads .env.`,
+  );
+});
 
 /**
  * The HTML document every page renders inside.

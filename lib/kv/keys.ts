@@ -117,6 +117,15 @@ export const keys = {
   /** Remembers that a user already cleared a game's join password. */
   gamePasswordOk: (gameId: string, userId: string) =>
     ["game_pw_ok", gameId, userId] as const,
+  /**
+   * One access request per person per game, so asking twice cannot queue twice.
+   * Shaped like `joinRequest` above and for the same reasons: status lives in
+   * the record, and the organizer reads the whole list at once.
+   */
+  accessRequest: (gameId: string, userId: string) =>
+    ["access_request", gameId, userId] as const,
+  accessRequestsByGamePrefix: (gameId: string) =>
+    ["access_request", gameId] as const,
 
   // ---- Signups ------------------------------------------------------------
   signup: (gameId: string, userId: string) =>

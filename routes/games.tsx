@@ -31,6 +31,7 @@ import { listGroupsOrganizedBy } from "../lib/data/groups.ts";
 import { sweepInBackground } from "../lib/data/sweep.ts";
 import { isSport, SPORT_LABELS, SPORTS } from "../lib/types.ts";
 import type { Game, Signup, Sport } from "../lib/types.ts";
+import SpotCancelledDialog from "../islands/SpotCancelledDialog.tsx";
 
 interface Listed {
   game: Game;
@@ -379,6 +380,17 @@ export function gamesRoute(app: App<State>) {
 
           {url.searchParams.get("notice") && (
             <Alert tone="success">{url.searchParams.get("notice")}</Alert>
+          )}
+
+          {
+            /* Raised by the redirect out of a cancellation, which lands here
+              rather than on the game the player just left. */
+          }
+          {url.searchParams.get("cancelled") && (
+            <SpotCancelledDialog
+              title={url.searchParams.get("cancelled")!}
+              owed={url.searchParams.get("owed") === "1"}
+            />
           )}
 
           <FilterBar

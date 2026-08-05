@@ -6,7 +6,10 @@
     // --unstable-kv is required for Deno.openKv outside Deno Deploy.
     "dev": "deno run -A --unstable-kv --env-file npm:vite",
     "build": "deno run -A --unstable-kv --env-file npm:vite build",
-    "start": "deno serve -A --unstable-kv _fresh/server.js",
+    // --env-file matches `dev`: without it the server boots fine but throws on
+    // the first request that needs APP_SECRET, which is any game page showing a
+    // check-in QR code.
+    "start": "deno serve -A --unstable-kv --env-file _fresh/server.js",
     "check": "deno fmt --check && deno lint && deno check .",
     "test": "deno test -A --unstable-kv",
     "test:watch": "deno test -A --unstable-kv --watch",

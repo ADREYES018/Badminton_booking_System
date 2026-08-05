@@ -9,7 +9,13 @@
 import { ulid } from "@std/ulid";
 import { keys } from "../kv/keys.ts";
 import { ConflictError, getRecord, listRecords, withRetry } from "../kv/kv.ts";
-import type { PlatformRole, Skill, StoredIban, User } from "../types.ts";
+import type {
+  PayoutDetails,
+  PlatformRole,
+  Skill,
+  StoredIban,
+  User,
+} from "../types.ts";
 import { normalizeEmail, normalizePhone } from "../domain/validate.ts";
 import { nowIso } from "../domain/time.ts";
 
@@ -145,6 +151,8 @@ export interface ProfileUpdate {
   emailOptIn?: boolean;
   hasPhoto?: boolean;
   iban?: StoredIban | null;
+  /** Null clears it; undefined leaves whatever is stored alone. */
+  payout?: PayoutDetails | null;
   checkinVersion?: number;
 }
 
@@ -172,6 +180,9 @@ export async function updateUser(
     if (update.hasPhoto !== undefined) next.hasPhoto = update.hasPhoto;
     if (update.iban !== undefined) {
       next.iban = update.iban === null ? undefined : update.iban;
+    }
+    if (update.payout !== undefined) {
+      next.payout = update.payout === null ? undefined : update.payout;
     }
     if (update.checkinVersion !== undefined) {
       next.checkinVersion = update.checkinVersion;

@@ -33,9 +33,12 @@ import {
   createGame,
   deleteGame,
   getGameBySlug,
+  listGamesByCreator,
+  listGamesByGroup,
   updateGame,
 } from "../../lib/data/games.ts";
 import { audit } from "../../lib/data/audit.ts";
+import { listGroupsOrganizedBy } from "../../lib/data/groups.ts";
 import { enqueueCutoffFreeze } from "../../lib/queue/messages.ts";
 import { aedToFils } from "../../lib/domain/money.ts";
 import { APP_TIMEZONE, cutoffAt } from "../../lib/domain/time.ts";
@@ -66,6 +69,11 @@ interface FormProps {
   game?: Game;
   error?: string;
   values?: Record<string, string>;
+  /**
+   * The title of the organizer's previous game, when there is one to copy and
+   * they have not asked for it yet. Offers the shortcut rather than taking it.
+   */
+  presetFrom?: string;
 }
 
 /**
@@ -132,6 +140,14 @@ function GameForm(props: FormProps) {
   const editing = game !== undefined;
   const field = (name: string, fallback: string) => values[name] ?? fallback;
 
+  // The selects below choose their option from these rather than from `game`
+  // directly, so a preset and an error redisplay both survive. Defaults match
+  // what a brand new game gets.
+  const visibility = field("visibility", game?.visibility ?? "public");
+  const sport = field("sport", game?.sport ?? DEFAULT_SPORT);
+  const skillMin = field("skillMin", game?.skillMin ?? "");
+  const skillMax = field("skillMax", game?.skillMax ?? "");
+
   // A club's games post and edit under that club; a clubless game uses the
   // bare paths, which check the creator instead of a membership. The two sets
   // are otherwise the same form.
@@ -166,6 +182,27 @@ function GameForm(props: FormProps) {
 
         {props.error && <Alert tone="error">{props.error}</Alert>}
 
+        {
+          /* A plain link rather than a control inside the form: it re-requests
+             the same page prefilled, so it costs nothing when scripting is off
+             and leaves the form itself with one submit button. */
+        }
+        {props.presetFrom && (
+          <div class="flex flex-wrap items-center justify-between gap-3 rounded-lg bg-surface-container px-4 py-3">
+            <span class="text-body-md text-on-surface-variant min-w-0">
+              Same as{" "}
+              <strong class="text-on-surface">{props.presetFrom}</strong>? Copy
+              its venue, size and price.
+            </span>
+            <a
+              href="?preset=1"
+              class="text-label font-bold text-primary hover:underline shrink-0"
+            >
+              Use last game →
+            </a>
+          </div>
+        )}
+
         <form
           method="post"
           action={action}
@@ -187,14 +224,13 @@ function GameForm(props: FormProps) {
             />
 
             <Select label="Sport" name="sport">
-              {SPORTS.map((sport) => (
+              {SPORTS.map((option) => (
                 <option
-                  key={sport}
-                  value={sport}
-                  selected={(values.sport ?? game?.sport ?? DEFAULT_SPORT) ===
-                    sport}
+                  key={option}
+                  value={option}
+                  selected={sport === option}
                 >
-                  {SPORT_LABELS[sport]}
+                  {SPORT_LABELS[option]}
                 </option>
               ))}
             </Select>
@@ -304,24 +340,24 @@ function GameForm(props: FormProps) {
           >
             <div class="grid gap-5 sm:grid-cols-2">
               <Select label="Minimum skill" name="skillMin">
-                <option value="" selected={!game?.skillMin}>Any</option>
+                <option value="" selected={!skillMin}>Any</option>
                 {SKILL_ORDER.map((skill) => (
                   <option
                     key={skill}
                     value={skill}
-                    selected={game?.skillMin === skill}
+                    selected={skillMin === skill}
                   >
                     {skill}
                   </option>
                 ))}
               </Select>
               <Select label="Maximum skill" name="skillMax">
-                <option value="" selected={!game?.skillMax}>Any</option>
+                <option value="" selected={!skillMax}>Any</option>
                 {SKILL_ORDER.map((skill) => (
                   <option
                     key={skill}
                     value={skill}
-                    selected={game?.skillMax === skill}
+                    selected={skillMax === skill}
                   >
                     {skill}
                   </option>
@@ -333,21 +369,27 @@ function GameForm(props: FormProps) {
               label="Visibility"
               name="visibility"
             >
+              {
+                /* Read through `field` rather than off the game, so a preset
+                   and a redisplayed-after-error form both keep the choice.
+                   Reading only `game` silently reverted a password game to
+                   public. */
+              }
               <option
                 value="public"
-                selected={!game || game.visibility === "public"}
+                selected={visibility === "public"}
               >
                 Public — anyone can find it and join
               </option>
               <option
                 value="password"
-                selected={game?.visibility === "password"}
+                selected={visibility === "password"}
               >
                 Listed, but a six-digit code is needed to join
               </option>
               <option
                 value="unlisted"
-                selected={game?.visibility === "unlisted"}
+                selected={visibility === "unlisted"}
               >
                 Unlisted — only people with the link
               </option>
@@ -550,6 +592,73 @@ function formValues(form: FormData): Record<string, string> {
   return values;
 }
 
+/**
+ * The organizer's last game, as form values for the next one.
+ *
+ * Most people run the same session repeatedly — same hall, same eight players,
+ * same price — and retyping all of it every week is the tedious part of
+ * posting. The previous game is already a record of those answers, so this
+ * reads it rather than introducing a preset to create and maintain separately.
+ *
+ * Date and time are deliberately excluded. Every other field is a standing
+ * preference; the start time is the one thing that is different by definition,
+ * and prefilling last week's would put a stale date in front of someone whose
+ * next action is to change it.
+ *
+ * The join code is excluded too — a reused code would let last week's players
+ * into a game they were not invited to.
+ */
+function presetFrom(game: Game): Record<string, string> {
+  return {
+    title: game.title,
+    sport: game.sport,
+    venueName: game.venue.name,
+    venueAddress: game.venue.address,
+    cutoffHours: String(game.cutoffHours),
+    maxPlayers: String(game.maxPlayers),
+    courts: String(game.courts),
+    pricePerPlayer: String(game.pricePerPlayerFils / 100),
+    maxGuests: String(game.maxGuestsPerPlayer),
+    skillMin: game.skillMin ?? "",
+    skillMax: game.skillMax ?? "",
+    visibility: game.visibility,
+  };
+}
+
+/**
+ * The most recent game this organizer posted, or null when it is their first.
+ *
+ * Two indexes rather than one, because `createGame` writes exactly one of them:
+ * a clubless game lands in the creator index, a club's game in that club's.
+ * Reading only the creator index would silently offer the shortcut to nobody
+ * who organizes through a club, which is most organizers.
+ *
+ * The club index is keyed by club rather than by person, so it is filtered back
+ * down to this organizer's own games — a preset built from a co-organizer's
+ * game would prefill someone else's venue and price.
+ *
+ * Cancelled games are included: an organizer whose last game fell through is
+ * especially likely to be reposting the same one.
+ */
+async function lastGameOf(
+  kv: Deno.Kv,
+  userId: string,
+  groupId?: string,
+): Promise<Game | null> {
+  const own = await listGamesByCreator(kv, userId, { limit: 1, reverse: true });
+
+  const club = groupId
+    ? (await listGamesByGroup(kv, groupId, { limit: 20, reverse: true }))
+      .filter((game) => game.createdBy === userId)
+    : [];
+
+  // Whichever is more recent by start time — the two indexes are each ordered,
+  // but neither knows about the other.
+  const candidates = [...own, ...club.slice(0, 1)];
+  return candidates.sort((a, b) => b.startUtc.localeCompare(a.startUtc))[0] ??
+    null;
+}
+
 /** The club named in the URL, and proof the caller may administer it. */
 async function organizerContext(state: State, groupSlug: string) {
   const access = assertOrganizer(
@@ -692,15 +801,24 @@ async function renderEditForm(
 
 export function organizerGameRoutes(app: App<State>) {
   app.get("/g/:groupSlug/organizer/games/new", async (ctx) => {
-    const { user, group } = await organizerContext(
+    const { user, kv, group } = await organizerContext(
       ctx.state,
       ctx.params.groupSlug!,
     );
+
+    // Opt-in rather than automatic: an organizer who wants a fresh form should
+    // get one, and silently prefilling a dozen fields from a game they may not
+    // have been thinking of is a worse default than an empty form.
+    const last = await lastGameOf(kv, user.id, group.id);
+    const usePreset = new URL(ctx.req.url).searchParams.get("preset") === "1";
+
     const response = await ctx.render(
       <GameForm
         user={user}
         csrf={ctx.state.auth.csrfToken}
         groupSlug={group.slug}
+        values={usePreset && last ? presetFrom(last) : undefined}
+        presetFrom={last && !usePreset ? last.title : undefined}
       />,
     );
     response.headers.append(
@@ -746,9 +864,22 @@ export function organizerGameRoutes(app: App<State>) {
    */
   app.get("/games/new", async (ctx) => {
     const user = requireUser(ctx.state.auth);
+    const kv = ctx.state.auth.kv;
+
+    // A game posted here belongs to nobody, but the organizer's own history
+    // may well be a club's — the shortcut is about what they last set up, not
+    // about which banner it ran under.
+    const clubs = await listGroupsOrganizedBy(kv, user.id);
+    const last = await lastGameOf(kv, user.id, clubs[0]?.id);
+    const usePreset = new URL(ctx.req.url).searchParams.get("preset") === "1";
 
     const response = await ctx.render(
-      <GameForm user={user} csrf={ctx.state.auth.csrfToken} />,
+      <GameForm
+        user={user}
+        csrf={ctx.state.auth.csrfToken}
+        values={usePreset && last ? presetFrom(last) : undefined}
+        presetFrom={last && !usePreset ? last.title : undefined}
+      />,
     );
     response.headers.append(
       "set-cookie",

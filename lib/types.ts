@@ -53,6 +53,20 @@ export interface User {
   checkinVersion?: number;
   /** Player's own refund account. Distinct from a group's payout account. */
   iban?: StoredIban;
+  /**
+   * Where this organizer wants to be paid for games they run.
+   *
+   * Deliberately not the refund `iban` above, which is encrypted at rest
+   * because it is private. Payout details are the opposite: they are shown to
+   * every player who owes money, with a copy button. Reusing one field for both
+   * would publish an account given to the app in confidence.
+   *
+   * Lives on the user rather than a club so that someone organizing a clubless
+   * game has somewhere to put it — until now they had nowhere, and their
+   * players saw "the organizer has not added bank details yet" with no way for
+   * the organizer to fix it.
+   */
+  payout?: PayoutDetails;
   emailOptIn: boolean;
   createdAt: string;
   updatedAt: string;
@@ -121,6 +135,31 @@ export type JoinRequestStatus = "pending" | "approved" | "rejected";
 export interface JoinRequest {
   v: 1;
   groupId: string;
+  userId: string;
+  status: JoinRequestStatus;
+  message?: string;
+  requestedAt: string;
+  decidedAt?: string;
+  decidedBy?: string;
+}
+
+/**
+ * A player asking the organizer to let them into one game.
+ *
+ * The game-level counterpart to `JoinRequest`, and deliberately separate from
+ * it: a club membership is a standing relationship, while this is about one
+ * evening. Someone allowed into Tuesday's game has not thereby joined anything.
+ *
+ * Approving records the unlock rather than handing over the code, so the code
+ * itself never travels through an inbox where it could be forwarded on. The
+ * player still chooses to take a seat afterwards.
+ *
+ * The record survives its decision, so a refused player is not silently
+ * re-queued by tapping again and the organizer can see who they turned away.
+ */
+export interface AccessRequest {
+  v: 1;
+  gameId: string;
   userId: string;
   status: JoinRequestStatus;
   message?: string;

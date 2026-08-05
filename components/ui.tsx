@@ -242,6 +242,11 @@ export function ProgressBar(
   const pct = props.max > 0
     ? Math.min(100, Math.round((props.value / props.max) * 100))
     : 0;
+  // A full roster is the one state worth seeing without reading the numbers,
+  // so it is the only one that changes colour. Anything short of full stays
+  // neutral rather than shading gradually, which would turn "nearly full" into
+  // a judgement the bar is not making.
+  const full = props.max > 0 && props.value >= props.max;
   return (
     <div class="w-full">
       <div class="flex justify-between mb-1">
@@ -260,7 +265,15 @@ export function ProgressBar(
         aria-valuemax={props.max}
         aria-label={props.label ?? "Spots filled"}
       >
-        <div class="bg-on-surface h-2 rounded-full" style={`width:${pct}%`} />
+        <div
+          class={cx(
+            "h-2 rounded-full transition-[background] duration-300",
+            full
+              ? "bg-gradient-to-r from-[#00e676] via-[#39ff14] to-[#00e676] shadow-[0_0_8px_rgba(57,255,20,0.55)]"
+              : "bg-on-surface",
+          )}
+          style={`width:${pct}%`}
+        />
       </div>
     </div>
   );

@@ -30,6 +30,7 @@ import {
   leaveGame,
   loadRoster,
   promoteNext,
+  promotePlayer,
   removeGuest,
   SignupError,
 } from "./signups.ts";
@@ -341,6 +342,79 @@ Deno.test("a freed seat promotes the head of the waitlist, who must confirm", as
     assertEquals(after.confirmedCount, 1);
     assertEquals(seatsRemaining(after), 0);
     await assertSeatsConsistent(kv, game.id);
+  });
+});
+
+Deno.test("an organizer can seat a waitlisted player in a full game", async () => {
+  await withTestKv(async (kv) => {
+    const { game } = await seedGame(kv, { courts: 1, playersPerCourt: 2 });
+    const players = await seedPlayers(kv, 3);
+
+    await joinGame(kv, game.id, players[0]!);
+    await joinGame(kv, game.id, players[1]!);
+    await joinGame(kv, game.id, players[2]!);
+
+    // No seat has been freed: the roster is full and the third player waits.
+    const full = await getGame(kv, game.id) as Game;
+    assertEquals(seatsRemaining(full), 0);
+    assertEquals(await promoteNext(kv, game.id).then((r) => r.promoted), false);
+
+    const seated = await promotePlayer(kv, game.id, players[2]!.id);
+
+    // Granted outright rather than offered — the organizer already decided.
+    assertEquals(seated.status, "confirmed");
+    assertEquals(seated.confirmDeadline, undefined);
+
+    const after = await getGame(kv, game.id) as Game;
+    assertEquals(after.confirmedCount, 3);
+    assertEquals(after.waitlistCount, 0);
+    // Over capacity now, which reads as full rather than as negative seats.
+    assertEquals(seatsRemaining(after), 0);
+    assertEquals(after.status, "full");
+  });
+});
+
+Deno.test("an organizer can seat someone out of waitlist order", async () => {
+  await withTestKv(async (kv) => {
+    const { game } = await seedGame(kv, { courts: 1, playersPerCourt: 1 });
+    const players = await seedPlayers(kv, 3);
+
+    await joinGame(kv, game.id, players[0]!);
+    await joinGame(kv, game.id, players[1]!);
+    await joinGame(kv, game.id, players[2]!);
+
+    // The second in the queue, chosen over the first.
+    await promotePlayer(kv, game.id, players[2]!.id);
+
+    assertEquals(
+      (await getSignup(kv, game.id, players[2]!.id))?.status,
+      "confirmed",
+    );
+    // The player ahead of them keeps their place rather than being displaced.
+    assertEquals(
+      (await getSignup(kv, game.id, players[1]!.id))?.status,
+      "waitlisted",
+    );
+  });
+});
+
+Deno.test("seating someone who is not waitlisted is refused", async () => {
+  await withTestKv(async (kv) => {
+    const { game } = await seedGame(kv, { courts: 1, playersPerCourt: 4 });
+    const players = await seedPlayers(kv, 2);
+
+    await joinGame(kv, game.id, players[0]!);
+
+    // Already confirmed: seating them again would double-count the seat.
+    await assertRejects(
+      () => promotePlayer(kv, game.id, players[0]!.id),
+      SignupError,
+    );
+    // Never joined at all.
+    await assertRejects(
+      () => promotePlayer(kv, game.id, players[1]!.id),
+      SignupError,
+    );
   });
 });
 

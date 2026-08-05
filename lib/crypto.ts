@@ -31,6 +31,23 @@ function requireEnv(name: string): string {
   return value;
 }
 
+/**
+ * Fails at boot when a secret is missing, rather than on the first request
+ * that happens to need one.
+ *
+ * Both keys are built lazily, so a server started without them serves most of
+ * the app perfectly well and then throws a 500 somewhere specific — a game
+ * page minting a check-in QR, say. The action that led there has already
+ * succeeded by then, which makes the failure read as a bug in whatever button
+ * was pressed rather than as missing configuration.
+ *
+ * Called for its throw; the keys it builds are the same cached promises every
+ * later caller gets.
+ */
+export async function assertSecretsPresent(): Promise<void> {
+  await Promise.all([getIbanKey(), getAppSecret()]);
+}
+
 let ibanKeyPromise: Promise<CryptoKey> | null = null;
 
 /** AES-256-GCM key for player refund IBANs, from IBAN_ENC_KEY. */
